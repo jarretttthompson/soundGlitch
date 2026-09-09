@@ -407,17 +407,25 @@ export class AudioIn {
     for (let i = 0; i < 300; i++) { x[i] -= mean; energy += x[i] * x[i]; }
     if (energy < 1e-7) { this.tempoConf *= 0.7; return; }
 
-    let best = 0, bestLag = 0;
-    for (let lag = 16; lag <= 50; lag++) {
+    // normalised autocorrelation per lag (each lag has a different number of terms)
+    // lags 16..60 = 188..50 BPM; ac runs to twice that for the octave check
+    const ac = new Float32Array(121);
+    for (let lag = 16; lag <= 120; lag++) {
       let r = 0;
       for (let i = lag; i < 300; i++) r += x[i] * x[i - lag];
+      ac[lag] = r / (energy * (300 - lag) / 300);
+    }
+    let best = 0, bestLag = 0;
+    for (let lag = 16; lag <= 60; lag++) {
+      // a true beat period also correlates at twice the lag; a 3:2 alias does not
+      let score = ac[lag] + 0.5 * ac[lag * 2];
       // mild preference for tempos near 120 so half/double picks settle
       const bpm = 3000 / lag;
-      r *= 1 - 0.25 * Math.abs(Math.log(bpm / 120));
-      if (r > best) { best = r; bestLag = lag; }
+      score *= 1 - 0.25 * Math.abs(Math.log(bpm / 120));
+      if (score > best) { best = score; bestLag = lag; }
     }
     if (bestLag === 0) { this.tempoConf *= 0.7; return; }
-    const conf = Math.max(0, Math.min(1, best / (energy * (300 - bestLag) / 300)));
+    const conf = Math.max(0, Math.min(1, ac[bestLag]));
     this.tempoConf = this.tempoConf * 0.5 + conf * 0.5;
     if (conf < 0.15) return;
 
