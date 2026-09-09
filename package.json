@@ -1,0 +1,14 @@
+{
+  "name": "soundglitch",
+  "version": "0.2.0",
+  "description": "Microphone in, strange visuals out. WebGL2 feedback shaders driven by Web Audio.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "python3 serve.py",
+    "bridge": "node bridge.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

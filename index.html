@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>soundGlitch</title>
+<style>
+  :root {
+    --bg: #050505;
+    --ink: #e8e8e8;
+    --dim: #6f6f6f;
+    --acc: #d4ff3a;
+    --err: #ff4a3a;
+    --line: rgba(232, 232, 232, 0.18);
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; background: var(--bg); color: var(--ink); overflow: hidden; }
+  body {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    -webkit-font-smoothing: antialiased;
+  }
+  #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+  #ui {
+    position: fixed; top: 14px; left: 14px;
+    display: flex; flex-direction: column; gap: 10px;
+    width: 400px; max-width: calc(100vw - 28px);
+    max-height: calc(100vh - 44px); overflow-y: auto;
+    padding: 12px 14px 14px;
+    background: rgba(5, 5, 5, 0.82);
+    border: 1px solid var(--line);
+    backdrop-filter: blur(6px);
+    transition: opacity 0.4s;
+    user-select: none;
+    scrollbar-width: thin;
+  }
+  body.idle #ui, body.idle #hint { opacity: 0; pointer-events: none; }
+  body.hidden #ui, body.hidden #hint { display: none; }
+  body.output #ui, body.output #hint { display: none; }
+
+  .head { display: flex; justify-content: space-between; align-items: baseline; }
+  .head h1 { font-size: 13px; font-weight: 700; letter-spacing: 0.2em; }
+  .head h1 span { color: var(--acc); }
+  #status { color: var(--dim); }
+  #status[data-state="mic"], #status[data-state="system"] { color: var(--acc); }
+  #status[data-state="test"] { color: var(--ink); }
+  #status[data-state="err"] { color: var(--err); }
+  .sub { color: var(--dim); font-size: 10px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .sub b { color: var(--ink); font-weight: 400; }
+  .sub .on { color: var(--acc); }
+
+  .row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .lbl { color: var(--dim); font-size: 10px; margin-bottom: 4px; }
+  .lbl b { color: var(--ink); font-weight: 400; }
+  .lbl i { font-style: normal; color: var(--dim); margin-left: 8px; text-transform: lowercase; letter-spacing: 0.03em; }
+
+  button, select {
+    font: inherit; letter-spacing: inherit; text-transform: inherit;
+    color: var(--ink); background: transparent;
+    border: 1px solid var(--line); padding: 5px 8px; cursor: pointer;
+    line-height: 1; white-space: nowrap;
+  }
+  button:hover, select:hover { border-color: var(--ink); }
+  button.on { background: var(--acc); color: #000; border-color: var(--acc); }
+  button.on:hover { border-color: var(--acc); }
+  #mic.on, #system.on, #test.on, #midi.on, #osc.on, #camera.on { background: var(--ink); border-color: var(--ink); }
+  select { -webkit-appearance: none; appearance: none; padding-right: 18px;
+    background-image: linear-gradient(45deg, transparent 50%, var(--dim) 50%), linear-gradient(135deg, var(--dim) 50%, transparent 50%);
+    background-position: calc(100% - 10px) 9px, calc(100% - 6px) 9px; background-size: 4px 4px; background-repeat: no-repeat; }
+  select option { background: #111; color: var(--ink); }
+  .chip { display: inline-flex; align-items: center; gap: 6px; }
+  .chip .x { color: var(--dim); padding: 0 0 0 4px; }
+  .chip .x:hover { color: var(--err); }
+
+  details { border-top: 1px solid var(--line); padding-top: 8px; }
+  summary { cursor: pointer; color: var(--dim); font-size: 10px; list-style: none; display: flex; justify-content: space-between; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: '+'; color: var(--dim); }
+  details[open] summary::after { content: '\\2013'; }
+  details > .body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+
+  .slider { display: grid; grid-template-columns: 64px 1fr 64px; align-items: center; gap: 8px; }
+  .slider span:last-child { text-align: right; color: var(--dim); white-space: nowrap; }
+  input[type=range] { -webkit-appearance: none; width: 100%; height: 14px; background: transparent; cursor: pointer; }
+  input[type=range]::-webkit-slider-runnable-track { height: 1px; background: var(--line); }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 8px; height: 14px; margin-top: -6.5px;
+    background: var(--ink); border: 0;
+  }
+  input[type=range]:hover::-webkit-slider-thumb { background: var(--acc); }
+
+  /* MIDI learn: everything mappable lights up, armed target pulses */
+  body.learning [data-target] { outline: 1px dashed var(--dim); outline-offset: 2px; }
+  body.learning [data-target].mapped { outline-color: var(--acc); }
+  body.learning [data-target].armed { outline: 2px solid var(--acc); }
+  body.learning .slider span:first-child { color: var(--acc); }
+
+  .meters { display: grid; grid-template-columns: 34px 1fr; gap: 3px 8px; align-items: center; margin-top: 2px; }
+  .meters .bar { height: 5px; background: var(--line); overflow: hidden; }
+  .meters .bar i { display: block; height: 100%; width: 100%; background: var(--ink); transform-origin: left; transform: scaleX(0); }
+  .meters .bar.acc i { background: var(--acc); }
+  .meters span { color: var(--dim); font-size: 10px; }
+  .flags { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+  .flag { padding: 3px 6px; border: 1px solid var(--line); color: var(--dim); font-size: 10px; white-space: nowrap; }
+  .flag.hit { border-color: var(--acc); color: var(--acc); }
+  #clip.hit { border-color: var(--err); color: var(--err); }
+
+  #hint {
+    position: fixed; left: 14px; bottom: 12px; color: var(--dim); font-size: 10px;
+    transition: opacity 0.4s;
+  }
+  #hint b { color: var(--ink); font-weight: 400; }
+
+  #tag { display: none; position: fixed; right: 14px; bottom: 12px; color: var(--dim); font-size: 10px; transition: opacity 0.4s; }
+  body.output #tag { display: block; }
+  body.output.idle #tag { opacity: 0; }
+  #tag b { color: var(--acc); font-weight: 400; }
+  input[type=file] { display: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="ui">
+  <div class="head">
+    <h1>SOUND<span>GLITCH</span></h1>
+    <div id="status">NO INPUT</div>
+  </div>
+  <div class="sub"><span id="tempoTxt">-- BPM</span><span id="linkTxt"></span><span id="midiTxt"></span><span id="oscTxt"></span></div>
+
+  <div class="row">
+    <button id="mic" data-target="mic">START MIC</button>
+    <button id="system">SYSTEM AUDIO</button>
+    <button id="test">TEST SIGNAL</button>
+    <select id="device" title="input device"><option value="">DEFAULT INPUT</option></select>
+  </div>
+
+  <div class="row">
+    <button id="auto" data-target="auto">AUTO CYCLE</button>
+    <button id="cycleScenes" data-target="cycleScenes">CYCLE SCENES</button>
+    <button id="random" data-target="random">RANDOM</button>
+    <button id="stage">STAGE OUTPUT</button>
+  </div>
+
+  <div>
+    <div class="lbl">MODE <b id="modeName"></b><i id="modeBlurb"></i></div>
+    <div class="row" id="modes"></div>
+  </div>
+
+  <div class="row">
+    <span class="lbl" style="margin:0">LAYER B</span>
+    <select id="layerB" data-target="layerSel"></select>
+    <select id="blend" data-target="blendSel"></select>
+  </div>
+
+  <div>
+    <div class="lbl">PALETTE</div>
+    <div class="row" id="palettes"></div>
+  </div>
+
+  <div class="slider"><span>CORRUPT</span><input id="corrupt" type="range" min="0" max="1" step="0.01"><span id="corruptVal"></span></div>
+  <div class="slider"><span>DECAY</span><input id="decay" type="range" min="0" max="1" step="0.01"><span id="decayVal"></span></div>
+  <div class="slider"><span>SENS</span><input id="sens" type="range" min="0.2" max="4" step="0.05"><span id="sensVal"></span></div>
+  <div class="slider"><span>FOCUS</span><input id="focus" type="range" min="0" max="1" step="0.01"><span id="focusVal"></span></div>
+  <div class="slider"><span>CYCLE</span><input id="cycle" type="range" min="1" max="64" step="1"><span id="cycleVal"></span></div>
+  <div class="slider"><span>FADE</span><input id="fade" type="range" min="0" max="10" step="0.1"><span id="fadeVal"></span></div>
+  <div class="slider"><span>RES</span><input id="res" type="range" min="0.2" max="1" step="0.05"><span id="resVal"></span></div>
+
+  <details id="srcSection">
+    <summary>SOURCE (LOGO / CAMERA)</summary>
+    <div class="body">
+      <div class="row">
+        <button id="imageBtn">IMAGE</button>
+        <button id="camera">CAMERA</button>
+        <button id="srcClear">NONE</button>
+        <span id="srcTxt" class="lbl" style="margin:0 0 0 6px"></span>
+        <input type="file" id="imageFile" accept="image/*">
+      </div>
+      <div class="slider"><span>BURN</span><input id="srcBurn" type="range" min="0" max="1" step="0.01"><span id="srcBurnVal"></span></div>
+      <div class="slider"><span>OVERLAY</span><input id="srcOpacity" type="range" min="0" max="1" step="0.01"><span id="srcOpacityVal"></span></div>
+      <div class="slider"><span>SIZE</span><input id="srcSize" type="range" min="0.05" max="1.5" step="0.01"><span id="srcSizeVal"></span></div>
+      <div class="slider"><span>X</span><input id="srcX" type="range" min="0" max="1" step="0.01"><span id="srcXVal"></span></div>
+      <div class="slider"><span>Y</span><input id="srcY" type="range" min="0" max="1" step="0.01"><span id="srcYVal"></span></div>
+    </div>
+  </details>
+
+  <details id="sceneSection" open>
+    <summary>SCENES</summary>
+    <div class="body">
+      <div class="row">
+        <button id="sceneSave">SAVE SCENE</button>
+        <button id="sceneExport">EXPORT</button>
+        <button id="sceneImportBtn">IMPORT</button>
+        <input type="file" id="sceneImport" accept="application/json,.json">
+      </div>
+      <div class="row" id="scenes"></div>
+    </div>
+  </details>
+
+  <details id="ctlSection">
+    <summary>MIDI / OSC</summary>
+    <div class="body">
+      <div class="row">
+        <button id="midi">MIDI</button>
+        <button id="learn">LEARN</button>
+        <button id="midiClear">CLEAR MAP</button>
+        <button id="osc">OSC BRIDGE</button>
+      </div>
+      <div class="lbl" id="ctlTxt" style="margin:0"></div>
+    </div>
+  </details>
+
+  <div class="meters">
+    <span>LVL</span><div class="bar acc"><i id="m-level"></i></div>
+    <span>BASS</span><div class="bar"><i id="m-bass"></i></div>
+    <span>MID</span><div class="bar"><i id="m-mid"></i></div>
+    <span>TRB</span><div class="bar"><i id="m-treble"></i></div>
+  </div>
+  <div class="flags">
+    <span class="flag" id="beat">BEAT</span>
+    <span class="flag" id="tick">TEMPO</span>
+    <span class="flag" id="music">MUSIC</span>
+    <span class="flag" id="clip">CLIP</span>
+    <button id="clear" data-target="clear">CLEAR</button>
+    <button id="full">FULLSCREEN</button>
+    <button id="hide">HIDE UI</button>
+  </div>
+</div>
+
+<div id="hint"><b>1-0</b> mode &nbsp; <b>space / arrows</b> next &nbsp; <b>shift+1-9</b> scene &nbsp; <b>p</b> palette &nbsp; <b>a</b> auto &nbsp; <b>[ ]</b> cycle speed &nbsp; <b>m</b> mic &nbsp; <b>t</b> test &nbsp; <b>r</b> random &nbsp; <b>c</b> clear &nbsp; <b>f</b> fullscreen &nbsp; <b>h</b> hide ui</div>
+<div id="tag"><b>OUTPUT</b> <span id="tagTxt">waiting for controller</span> &nbsp; f fullscreen</div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
