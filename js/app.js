@@ -26,7 +26,7 @@ try {
 
 const DEFAULTS = {
   mode: 0, palette: 0, corrupt: 0.5, decay: 0.65, sens: 1.0, focus: 0.5, dynamics: 0.6,
-  auto: false, cycleScenes: false, randomCycle: false, cycle: 16, fade: 2, res: 0.7,
+  auto: false, cycleScenes: false, randomCycle: false, cycle: 16, fade: 4, res: 0.7,
   layerB: -1, blend: 1, paletteB: -1,
   seed: [0.5, 0.5, 0.5, 0.5], seedB: [0.5, 0.5, 0.5, 0.5],
   mirror: 0, pixel: 0, hue: 0, poster: 0,
@@ -37,10 +37,14 @@ const DEFAULTS = {
 // what each lock covers when randomizing
 const LOCK_GROUPS = {
   mode: ['mode'], palette: ['palette'], seed: ['seed', 'seedB'],
-  layerB: ['layerB', 'blend', 'paletteB'],
-  corrupt: ['corrupt'], decay: ['decay'], sens: ['sens'], cycle: ['cycle'],
+  layerB: ['layerB'], blend: ['blend'], paletteB: ['paletteB'],
+  corrupt: ['corrupt'], decay: ['decay'], sens: ['sens'], focus: ['focus'], dynamics: ['dynamics'],
+  cycle: ['cycle'], fade: ['fade'],
   mirror: ['mirror'], pixel: ['pixel'], hue: ['hue'], poster: ['poster'],
+  srcBurn: ['srcBurn'], srcOpacity: ['srcOpacity'], srcSize: ['srcSize'], srcX: ['srcX'], srcY: ['srcY'],
 };
+// locked out of the box: transport and input settings, and the source placement
+const DEFAULT_LOCKS = { fade: true, focus: true, dynamics: true, srcBurn: true, srcOpacity: true, srcSize: true, srcX: true, srcY: true };
 function locked(key) {
   for (const [lock, keys] of Object.entries(LOCK_GROUPS)) if (params.locks[lock] && keys.includes(key)) return true;
   return false;
@@ -71,6 +75,7 @@ const smoothstep = t => t * t * (3 - 2 * t);
 
 const params = Object.assign({}, DEFAULTS, load());
 if (!params.locks || typeof params.locks !== 'object') params.locks = {};
+for (const [k, v] of Object.entries(DEFAULT_LOCKS)) if (!(k in params.locks)) params.locks[k] = v;
 function load() {
   try { return JSON.parse(localStorage.getItem(STORE) || '{}'); } catch (_) { return {}; }
 }
@@ -100,7 +105,7 @@ function apply(fade = params.fade) {
   engine.setPalette(params.palette, fade, 0);
   if (params.paletteB >= PALETTES.length) params.paletteB = -1;
   engine.setPalette(params.paletteB < 0 ? params.palette : params.paletteB, fade, 1);
-  engine.blend = params.blend;
+  engine.setBlend(params.blend, fade);
   engine.src.burn = params.srcBurn;
   engine.src.opacity = params.srcOpacity;
   engine.src.size = params.srcSize;
@@ -122,7 +127,7 @@ function commit(fade = params.fade) {
 function setMode(i, fade = params.fade) { params.mode = wrap(i, MODES.length); commit(fade); }
 function setPalette(i, fade = params.fade) { params.palette = wrap(i, PALETTES.length); commit(fade); }
 function setLayerB(i, fade = params.fade) { params.layerB = Math.max(-1, Math.min(MODES.length - 1, i)); commit(fade); }
-function setBlend(i) { params.blend = wrap(i, BLENDS.length); commit(0); }
+function setBlend(i, fade = params.fade) { params.blend = wrap(i, BLENDS.length); commit(fade); }
 function setPaletteB(i, fade = params.fade) { params.paletteB = Math.max(-1, Math.min(PALETTES.length - 1, i)); commit(fade); }
 function setAuto(v) { params.auto = v; commit(0); }
 // the two cycle flavours switch auto-cycle on when enabled; AUTO CYCLE is the master switch
@@ -134,23 +139,30 @@ function setRandomCycle(v) { params.randomCycle = v; if (v) { params.cycleScenes
 // fade time. FADE itself is never part of a transition.
 function transitionTo(target, fade = params.fade) {
   const from = {}, to = {};
+  let nextFade = null;
   for (const [k, v] of Object.entries(target)) {
-    if (k === 'fade') continue;
+    if (k === 'fade') { nextFade = v; continue; } // a new FADE applies after this transition
     if (fade > 0 && TWEEN_KEYS.includes(k) && typeof v === 'number' && Math.abs(v - params[k]) > 1e-6) {
       from[k] = params[k];
-      to[k] = v;
+      // hue is a circle: take the short way round
+      to[k] = k === 'hue' && Math.abs(v - params[k]) > 0.5 ? v + (v < params[k] ? 1 : -1) : v;
     } else {
       params[k] = v;
     }
   }
   tween = Object.keys(to).length ? { from, to, t: 0, dur: fade } : null;
   commit(fade);
+  if (nextFade !== null) { params.fade = nextFade; refreshSliders(); save(); }
 }
 function stepTween(dt) {
   if (!tween) return;
   tween.t = Math.min(1, tween.t + dt / Math.max(0.01, tween.dur));
   const s = smoothstep(tween.t);
-  for (const k of Object.keys(tween.to)) params[k] = tween.from[k] + (tween.to[k] - tween.from[k]) * s;
+  for (const k of Object.keys(tween.to)) {
+    let v = tween.from[k] + (tween.to[k] - tween.from[k]) * s;
+    if (k === 'hue') v = ((v % 1) + 1) % 1;
+    params[k] = v;
+  }
   apply(0);
   const done = tween.t >= 1;
   if (done || (engine.frame & 3) === 0) {
@@ -200,6 +212,17 @@ function randomize() {
     target.layerB = b;
     target.blend = pick(BLENDS.length);
     target.paletteB = chance(0.5) ? -1 : pick(PALETTES.length);
+  }
+  // normally locked; only rolled when the user unlocks them
+  target.fade = [0.5, 1, 2, 3, 4, 6][pick(6)];
+  target.focus = +r(0, 1).toFixed(2);
+  target.dynamics = +r(0.2, 1).toFixed(2);
+  if (engine.srcKind !== 'none') {
+    target.srcBurn = chance(0.5) ? 0 : +r(0.2, 1).toFixed(2);
+    target.srcOpacity = chance(0.4) ? 0 : +r(0.2, 0.8).toFixed(2);
+    target.srcSize = +r(0.2, 1).toFixed(2);
+    target.srcX = +r(0.2, 0.8).toFixed(2);
+    target.srcY = +r(0.2, 0.8).toFixed(2);
   }
   sceneIdx = -1;
   transitionTo(stripLocked(target));
@@ -319,7 +342,11 @@ function refreshSliders() {
 }
 
 // lock toggles: exclude a setting from RANDOM / RANDOM CYCLE / VARY
+const LOCK_SVG = '<svg class="open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0"/></svg>'
+  + '<svg class="closed" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg>';
 document.querySelectorAll('.lock').forEach(b => {
+  if (!b.firstChild) b.innerHTML = LOCK_SVG;
+  if (!b.title || b.title === 'lock') b.title = 'exclude from randomization';
   b.addEventListener('click', e => {
     e.stopPropagation();
     const k = b.dataset.lock;
@@ -333,6 +360,13 @@ function refreshLocks() {
   const n = Object.values(params.locks).filter(Boolean).length;
   $('#random').title = n ? `${n} setting${n > 1 ? 's' : ''} locked` : 'reroll everything';
 }
+function setAllLocks(v) {
+  for (const k of Object.keys(LOCK_GROUPS)) params.locks[k] = v;
+  refreshLocks();
+  save();
+}
+$('#lockAll').addEventListener('click', () => setAllLocks(true));
+$('#unlockAll').addEventListener('click', () => setAllLocks(false));
 
 function refreshUI() {
   $('#modeName').textContent = MODES[params.mode].name;
@@ -798,6 +832,10 @@ engine.layers[1].mode = params.layerB;
 engine.layers[0].palette = params.palette;
 engine.layers[1].palette = params.paletteB < 0 ? params.palette : params.paletteB;
 engine.fx.mirror = params.mirror;
+engine.blend = params.blend;
+engine.blendFrom = params.blend;
+engine.layers[1].alpha = params.layerB >= 0 ? 1 : 0;
+engine.layers[1].alphaTarget = engine.layers[1].alpha;
 if (Array.isArray(params.seed) && params.seed.length === 4) engine.layers[0].seed = params.seed.slice();
 if (Array.isArray(params.seedB) && params.seedB.length === 4) engine.layers[1].seed = params.seedB.slice();
 apply(0);

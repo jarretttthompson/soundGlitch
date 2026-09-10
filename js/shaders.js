@@ -603,8 +603,10 @@ uniform sampler2D uTexB2;
 uniform sampler2D uSrc;
 uniform float uMix;
 uniform float uMixB;
-uniform float uHasB;
+uniform float uAlphaB;    // layer B opacity (fades in / out)
 uniform int   uBlend;
+uniform int   uBlendFrom;
+uniform float uBlendMix;  // 1 = settled on uBlend
 uniform vec4  uSrcRect;
 uniform float uSrcOpacity;
 uniform float uMirror;   // kaleidoscope segments, < 2 = off
@@ -634,6 +636,15 @@ vec3 hueRotate(vec3 c, float a) {
   const vec3 k = vec3(0.57735);
   float cs = cos(a), sn = sin(a);
   return c * cs + cross(k, c) * sn + k * dot(k, c) * (1.0 - cs);
+}
+
+vec3 blendFn(vec3 a, vec3 b, int m) {
+  if (m == 1) return a + b * 0.65;   // softened so two bright layers don't white out
+  if (m == 2) return a * b * 2.0;
+  if (m == 3) return 1.0 - (1.0 - a) * (1.0 - b);
+  if (m == 4) return abs(a - b);
+  if (m == 5) return max(a, b);
+  return mix(a, b, 0.5);
 }
 
 // kaleidoscope fold
@@ -670,16 +681,13 @@ vec3 shade(vec2 uv) {
   vec3 col = fetch(uTex, suv, ab);
   if (uMix < 1.0) col = mix(fetch(uTex2, suv, ab), col, uMix);
 
-  // layer B, blended in
-  if (uHasB > 0.5) {
+  // layer B, blended in with its opacity; a blend-mode change mixes both results
+  if (uAlphaB > 0.0) {
     vec3 b = fetch(uTexB, suv, ab);
     if (uMixB < 1.0) b = mix(fetch(uTexB2, suv, ab), b, uMixB);
-    if (uBlend == 1) col = col + b * 0.65;   // softened so two bright layers don't white out
-    else if (uBlend == 2) col = col * b * 2.0;
-    else if (uBlend == 3) col = 1.0 - (1.0 - col) * (1.0 - b);
-    else if (uBlend == 4) col = abs(col - b);
-    else if (uBlend == 5) col = max(col, b);
-    else col = mix(col, b, 0.5);
+    vec3 blended = blendFn(col, b, uBlend);
+    if (uBlendMix < 1.0) blended = mix(blendFn(col, b, uBlendFrom), blended, uBlendMix);
+    col = mix(col, blended, uAlphaB);
   }
 
   // scanlines, vignette, dither

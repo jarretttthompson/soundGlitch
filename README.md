@@ -76,11 +76,16 @@ seconds after starting to settle.
   avoids the last six modes and five palettes so runs don't repeat. FADE
   and auto-cycle are left alone.
 - VARY (`v`) rerolls only the variation seeds: same modes, new structure.
-- Locks: the small padlock beside a setting excludes it from RANDOM,
-  RANDOM CYCLE and VARY. Lockable: mode, palette, the variation seeds
-  (padlock next to VARY), the whole layer B row, CORRUPT, DECAY, SENS,
-  CYCLE and each FX slider. FOCUS, DYNAMICS, FADE, RES and the source
-  placement are never randomized. Locks persist with your settings.
+- Locks: the padlock beside every setting excludes it from RANDOM, RANDOM
+  CYCLE and VARY. FADE, FOCUS, DYNAMICS and the source placement start
+  locked; unlock them and they get rolled too (FADE between 0.5 and 6 s,
+  DYNAMICS 20% to 100%, the source only when one is loaded). LOCK ALL and
+  UNLOCK ALL sit next to VARY. RES has no lock because changing the render
+  size clears the buffers, which would never be smooth. Locks persist.
+- Every change crossfades. Mode, seed, palette, layer B on/off, blend mode
+  and mirror all blend over the fade time; the continuous sliders glide;
+  hue takes the short way round the wheel. The default FADE is 4 s; turn
+  it up for slower morphs.
 - Variation seeds: every mode reads four random numbers that change its
   structure, not just its motion. Grid sizes, ring radii, string counts,
   kaleidoscope segments, scroll direction, sweep direction, lissajous

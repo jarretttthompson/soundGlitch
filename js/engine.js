@@ -31,6 +31,11 @@ class Layer {
     this.palDur = 0;
     this.seed = [0.5, 0.5, 0.5, 0.5];
     this.fromSeed = this.seed;
+    // opacity, so a layer can fade in when switched on and out when switched off
+    this.alpha = 1;
+    this.alphaTarget = 1;
+    this.alphaDur = 0;
+    this.pendingOff = false;
   }
   get fading() { return this.fadeT < 1; }
 }
@@ -47,7 +52,12 @@ export class Engine {
 
     this.layers = [new Layer(), new Layer()];
     this.layers[1].mode = -1;
+    this.layers[1].alpha = 0;
+    this.layers[1].alphaTarget = 0;
     this.blend = 1;
+    this.blendFrom = 1;
+    this.blendT = 1;
+    this.blendDur = 0;
     this.fx = { mirror: 0, pixel: 0, hue: 0, poster: 0 };
     this.mirrorFrom = 0;
     this.mirrorT = 1;
@@ -267,11 +277,24 @@ export class Engine {
   }
 
   // Change a layer's mode and/or variation seed; either change crossfades.
+  // Switching a layer off (i < 0) fades its opacity out and only then stops
+  // it; switching on fades it in.
   setMode(i, dur = 0, layer = 0, seed = null) {
     const L = this.layers[layer];
     const seedChanged = !!seed && !sameSeed(seed, L.seed);
-    if (i === L.mode && !seedChanged) return;
-    if (dur > 0 && L.fbos && L.mode >= 0 && i >= 0) {
+    if (i < 0) {
+      if (L.mode < 0 && !L.pendingOff) return;
+      if (dur > 0) { L.alphaTarget = 0; L.alphaDur = dur; L.pendingOff = true; }
+      else { L.mode = -1; L.alpha = 0; L.alphaTarget = 0; L.pendingOff = false; }
+      return;
+    }
+    const wasOff = L.mode < 0;
+    if (!wasOff && i === L.mode && !seedChanged) {
+      // same look, but maybe cancel a pending fade-out
+      if (L.pendingOff) { L.pendingOff = false; L.alphaTarget = 1; L.alphaDur = dur || 0.01; }
+      return;
+    }
+    if (dur > 0 && L.fbos && !wasOff) {
       this._snapshotToB(L);
       L.fromMode = L.mode;
       L.fromSeed = L.seed;
@@ -280,8 +303,38 @@ export class Engine {
     } else {
       L.fadeT = 1;
     }
+    if (wasOff) {
+      L.alpha = dur > 0 ? 0 : 1;
+      if (this.layers.indexOf(L) > 0 && L.fbos) this._clearPair(L.fbos); // start clean, not from stale frames
+    }
+    L.pendingOff = false;
+    L.alphaTarget = 1;
+    L.alphaDur = dur;
     L.mode = i;
     if (seed) L.seed = seed.slice();
+  }
+
+  _clearPair(pair) {
+    const gl = this.gl;
+    for (const f of pair) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, f.fb);
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  // Blend modes are discrete, so a change crossfades the two results.
+  setBlend(i, dur = 0) {
+    if (i === this.blend) return;
+    if (dur > 0) {
+      this.blendFrom = this.blendT < 0.5 ? this.blendFrom : this.blend;
+      this.blendT = 0;
+      this.blendDur = dur;
+    } else {
+      this.blendT = 1;
+    }
+    this.blend = i;
   }
 
   get mode() { return this.layers[0].mode; }
@@ -408,6 +461,11 @@ export class Engine {
 
   _renderLayer(L, audio, params, time, dt, inject) {
     if (L.mode < 0) return null;
+    if (L.alpha !== L.alphaTarget) {
+      const step = dt / Math.max(0.01, L.alphaDur);
+      L.alpha = L.alpha < L.alphaTarget ? Math.min(L.alphaTarget, L.alpha + step) : Math.max(L.alphaTarget, L.alpha - step);
+      if (L.alpha === 0 && L.pendingOff) { L.pendingOff = false; L.mode = -1; return null; }
+    }
     if (L.fadeT < 1) L.fadeT = Math.min(1, L.fadeT + dt / Math.max(0.01, L.fadeDur));
     if (L.palT < 1) L.palT = Math.min(1, L.palT + dt / Math.max(0.01, L.palDur));
     const fading = L.fadeT < 1;
@@ -427,7 +485,7 @@ export class Engine {
     this._drawMode(L, L.mode, L.seed, src.tex, dst, audio, params, time, dt);
     if (inject) this._inject(dst, inject);
     L.read = 1 - L.read;
-    return { tex: dst.tex, outTex: outTex || dst.tex, mix: fading ? smooth(L.fadeT) : 1 };
+    return { tex: dst.tex, outTex: outTex || dst.tex, mix: fading ? smooth(L.fadeT) : 1, alpha: smooth(L.alpha) };
   }
 
   render(audio, params, time, dt) {
@@ -464,8 +522,11 @@ export class Engine {
     gl.uniform1i(this._u(P, 'uSrc'), 4);
     gl.uniform1f(this._u(P, 'uMix'), A.mix);
     gl.uniform1f(this._u(P, 'uMixB'), B ? B.mix : 1);
-    gl.uniform1f(this._u(P, 'uHasB'), B ? 1 : 0);
+    gl.uniform1f(this._u(P, 'uAlphaB'), B ? B.alpha : 0);
+    if (this.blendT < 1) this.blendT = Math.min(1, this.blendT + dt / Math.max(0.01, this.blendDur));
     gl.uniform1i(this._u(P, 'uBlend'), this.blend);
+    gl.uniform1i(this._u(P, 'uBlendFrom'), this.blendFrom);
+    gl.uniform1f(this._u(P, 'uBlendMix'), this.blendT < 1 ? smooth(this.blendT) : 1);
     gl.uniform4f(this._u(P, 'uSrcRect'), ...this._srcRect());
     gl.uniform1f(this._u(P, 'uSrcOpacity'), hasSrc ? this.src.opacity : 0);
     if (this.mirrorT < 1) this.mirrorT = Math.min(1, this.mirrorT + dt / Math.max(0.01, this.mirrorDur));
