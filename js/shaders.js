@@ -8,32 +8,50 @@ void main() {
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
+// Everything the analyser knows, available to every mode, sim and the post pass.
+export const AUDIO_UNIFORMS = `
+uniform sampler2D uAudio;   // 512x2: row 0 spectrum, row 1 waveform
+uniform sampler2D uHist;    // 512x64 spectrum history, newest row at uHistRow
+uniform float uHistRow;
+uniform vec2  uRes;
+uniform float uTime;
+uniform float uDt;
+uniform float uLevel, uBass, uMid, uTreble;
+uniform float uBeat, uBeatCount;                       // generic bass onset
+uniform float uKick, uSnare, uHat;                     // per-band onset envelopes
+uniform float uKickCount, uSnareCount, uHatCount;
+uniform float uBar, uBarPhase, uBeatTime;              // bar count, 0..1 within the bar, continuous beats
+uniform float uPhrase, uPhrasePhase, uDownbeat;        // 8-bar phrases
+uniform float uDrop, uBuild;                           // drop envelope, build-up 0..1
+uniform float uPitch, uKeyHue, uChromaClarity;         // dominant pitch 0..1 (log), key as hue 0..1
+uniform float uChroma[12];                             // pitch-class energy, C = 0
+uniform float uCentroid, uFlat, uHarm, uPerc;          // brightness, noisiness, harmonic, percussive
+uniform float uWidth, uPan;                            // stereo width 0..1, pan -1..1
+uniform float uSilence, uPunch, uSharp;                // silence 0..1, envelope punch, transient sharpness
+uniform float uMusic;                                  // how much the musical mappings apply
+uniform float uCorrupt, uDecay, uSens;
+uniform vec4  uSeed;      // per-look variation, 0..1 each; rerolled by VARY / RANDOM / auto-cycle
+float spec(float x) { return texture(uAudio, vec2(clamp(x, 0.0, 1.0), 0.25)).r; }
+float wav(float x)  { return texture(uAudio, vec2(fract(x), 0.75)).r * 2.0 - 1.0; }
+// spectrum age 0 = now .. 1 = about two seconds ago
+float hist(float x, float age) {
+  float row = uHistRow - clamp(age, 0.0, 1.0) * 63.0;
+  return texture(uHist, vec2(clamp(x, 0.0, 1.0), fract((row + 0.5) / 64.0))).r;
+}
+float chroma(int pc) { return uChroma[pc]; }
+`;
+
 export const COMMON = `#version 300 es
 precision highp float;
 precision highp int;
 uniform sampler2D uPrev;
-uniform sampler2D uAudio;
 uniform sampler2D uSim;
-uniform vec2  uRes;
-uniform float uTime;
-uniform float uDt;
-uniform float uLevel;
-uniform float uBass;
-uniform float uMid;
-uniform float uTreble;
-uniform float uBeat;
-uniform float uBeatCount;
-uniform float uCorrupt;
-uniform float uDecay;
-uniform float uSens;
 uniform int   uPalette;
 uniform int   uPaletteTo;
 uniform float uPalMix;
-uniform vec4  uSeed;      // per-look variation, 0..1 each; rerolled by VARY / RANDOM / auto-cycle
+uniform float uKeyAmt;    // how far the song's key shifts every palette
 out vec4 fragColor;
-
-float spec(float x) { return texture(uAudio, vec2(clamp(x, 0.0, 1.0), 0.25)).r; }
-float wav(float x)  { return texture(uAudio, vec2(fract(x), 0.75)).r * 2.0 - 1.0; }
+` + AUDIO_UNIFORMS + `
 
 float hash21(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
@@ -71,8 +89,10 @@ vec3 palN(int n, float t) {
   if (k < 3.0) return vec3(1.0, 0.33, 1.0);
   return vec3(1.0);
 }
-// palette changes crossfade: uPalette is the outgoing one, uPaletteTo the incoming
+// palette changes crossfade: uPalette is the outgoing one, uPaletteTo the incoming;
+// the song's key shifts every palette by uKeyAmt of a full cycle
 vec3 palette(float t) {
+  t += uKeyHue * uKeyAmt;
   vec3 a = palN(uPalette, t);
   if (uPalMix <= 0.0) return a;
   return mix(a, palN(uPaletteTo, t), uPalMix);
@@ -95,14 +115,14 @@ void main() {
   float h = hash21(cell + floor(uTime * 4.0) * (0.3 + uBeat));
   float s = spec(fract(h * 7.0) * 0.4);
   vec2 shift = vec2(0.0);
-  if (h < uCorrupt * 0.3 + uBeat * 0.35) {
+  if (h < uCorrupt * 0.3 + max(uBeat, uSnare * uMusic) * 0.35) {
     shift = (vec2(hash21(cell.yx + 1.7), hash21(cell + 3.1)) - 0.5) * s * 0.25;
   }
 
   // slow curl flow + bass push
   float ang = noise(p * (1.5 + 4.0 * uSeed.w) + uTime * 0.15) * 6.28318;
   vec2 flow = vec2(cos(ang), sin(ang)) * (0.0015 + 0.02 * uBass);
-  vec2 src = uv + shift + flow - (uv - 0.5) * (0.004 + 0.02 * uMid);
+  vec2 src = uv + shift + flow - (uv - 0.5) * (0.004 + 0.02 * uMid + 0.03 * uKick * uMusic);
 
   vec3 prev = texture(uPrev, src).rgb;
   prev.r = mix(prev.r, texture(uPrev, src + vec2(0.004 * uTreble, 0.0)).r, 0.6);
@@ -131,7 +151,7 @@ void main() {
   // shear rows by bass, tear rows on beats
   src.y += sin(uv.x * 18.0 + uTime * 1.7) * 0.0015 * uBass * uCorrupt;
   float row = floor(uv.y * (24.0 + 72.0 * uSeed.z));
-  float tear = step(1.0 - uCorrupt * 0.4 * uBeat, hash21(vec2(row, floor(uTime * 24.0))));
+  float tear = step(1.0 - uCorrupt * 0.4 * max(uBeat, uSnare * uMusic), hash21(vec2(row, floor(uTime * 24.0))));
   src.x += tear * (hash21(vec2(row + 9.0, floor(uTime * 24.0))) - 0.5) * 0.12;
   // slow melt toward the bottom, only when corruption is up
   src.y -= 0.0004 * (1.0 + 3.0 * uMid) * uv.y * uCorrupt;
@@ -160,7 +180,7 @@ void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
   vec2 p = (uv - 0.5) * aspect();
 
-  float seg = 2.0 + floor(uSeed.x * 6.0) + mod(uBeatCount, 3.0);
+  float seg = 2.0 + floor(uSeed.x * 6.0) + mod(uMusic > 0.5 ? uBar : uBeatCount, 3.0);
   float ang = atan(p.y, p.x);
   float r = length(p);
   float k = 6.28318 / seg;
@@ -215,7 +235,7 @@ void main() {
 
   // previous frame scrolls up, rows byte-shift on beats
   float row = floor(uv.y * 40.0);
-  float shift = step(1.0 - uCorrupt * 0.5 * uBeat, hash21(vec2(row, floor(uTime * 12.0)))) * (1.0 / 16.0);
+  float shift = step(1.0 - uCorrupt * 0.5 * max(uBeat, uSnare * uMusic), hash21(vec2(row, floor(uTime * 12.0)))) * (1.0 / 16.0);
   float dir = uSeed.w > 0.5 ? 1.0 : -1.0;
   vec3 prev = texture(uPrev, uv + vec2(shift, dir * (1.0 + uMid * 5.0) / uRes.y)).rgb;
 
@@ -244,7 +264,7 @@ void main() {
   vec3 col = palette(band + a / 6.28318 + uTime * 0.08) * wall * (0.5 + uBass);
   col *= smoothstep(0.0, 0.18, r);
 
-  vec2 fuv = (p * (0.96 - 0.03 * uBeat)) / aspect() + 0.5;
+  vec2 fuv = (p * (0.96 - 0.03 * uBeat - 0.04 * uKick * uMusic)) / aspect() + 0.5;
   vec3 prev = texture(uPrev, fuv).rgb * uDecay * 0.92;
   fragColor = vec4(max(col, prev), 1.0);
 }`,
@@ -260,7 +280,7 @@ void main() {
   // horizontal hold wobble from the waveform, tears on beats
   float roll = wav(fract(uv.y * 0.5 + uTime * 0.1)) * 0.04 * uLevel * uSens;
   float line = floor(uv.y * uRes.y / 3.0);
-  float tear = step(0.97 - uBeat * 0.4 * uCorrupt, hash21(vec2(line, ft))) *
+  float tear = step(0.97 - max(uBeat, uSnare * uMusic) * 0.4 * uCorrupt, hash21(vec2(line, ft))) *
                (hash21(vec2(ft, floor(uv.y * 40.0))) - 0.5) * 0.3 * uCorrupt;
   vec2 src = uv + vec2(roll + tear, 0.0);
   src.y = fract(src.y + 0.002 * uBass + sin(uTime) * 0.001);
@@ -319,7 +339,7 @@ void main() {
 
   // sparse drops anywhere on beats
   vec2 cell = floor(uv * vec2(40.0, 24.0));
-  float drop = step(0.995 - 0.02 * uBeat, hash21(cell + floor(uTime * 8.0))) * spec(fract(hash21(cell) * 3.0) * 0.5);
+  float drop = step(0.995 - 0.02 * uBeat - 0.03 * uHat * uMusic, hash21(cell + floor(uTime * 8.0))) * spec(fract(hash21(cell) * 3.0) * 0.5);
   ink += palette(hash21(cell)) * drop * 1.5;
 
   fragColor = vec4(prev * mix(uDecay, 1.0, 0.7) + ink, 1.0);
@@ -337,7 +357,8 @@ void main() {
 
   float ph = r * (8.0 + 24.0 * uSeed.x) - uTime * (2.0 + 4.0 * uLevel) * sign(uSeed.w - 0.5);
   float ring = 0.5 + 0.5 * sin(ph);
-  float burst = smoothstep(0.03, 0.0, abs(r - (1.0 - uBeat) * 0.8)) * uBeat;
+  float kb = max(uBeat * (1.0 - uMusic), uKick * uMusic);
+  float burst = smoothstep(0.03, 0.0, abs(r - (1.0 - kb) * 0.8)) * kb;
   float w = wav(a * 2.0 + uTime * 0.05) * 0.1 * uLevel;
 
   // refract the previous frame through the ring height field
@@ -364,7 +385,7 @@ void main() {
 
   float band = spec(pow((idx + 0.5) / n, 1.6) * 0.5);
   float env = sin(uv.x * 3.14159);
-  float w = wav(uv.x * 0.5 + idx * 0.07 + uTime * 0.02) * band * env * 0.6 * (0.5 + uSens * 0.5);
+  float w = wav(uv.x * 0.5 + idx * 0.07 + uTime * 0.02) * band * env * 0.6 * (0.5 + uSens * 0.5) * (1.0 + uSnare * uMusic);
   float d = abs(fy - w);
   float line = smoothstep(0.02 + 0.03 * band, 0.0, d);
   float glow = smoothstep(0.3, 0.0, d) * band * 0.15;
@@ -392,7 +413,7 @@ void main() {
   float beam = smoothstep(0.3, 0.0, da);
 
   float s = spec(pow(a01, 2.0) * 0.5);
-  float blip = smoothstep(0.03, 0.0, abs(r - 0.08 - s * 0.4)) * beam * 2.5;
+  float blip = smoothstep(0.03, 0.0, abs(r - 0.08 - s * 0.4)) * beam * (2.5 + 3.0 * uHat * uMusic);
   float fillArea = step(r, 0.08 + s * 0.4) * beam * 0.25;
   float gd = 4.0 + floor(uSeed.x * 12.0);
   float grid = (step(0.97, fract(r * gd)) + step(0.985, fract(a01 * gd))) * 0.2 * step(r, 0.5);
@@ -448,10 +469,10 @@ void main() {
   float s = spec(fract(id * 5.0) * 0.5);
 
   // each shard shoves the previous frame in its own direction, harder on beats
-  vec2 disp = (hash22(v.yz + 3.3) - 0.5) * s * 0.06 * (0.3 + uBeat);
+  vec2 disp = (hash22(v.yz + 3.3) - 0.5) * s * 0.06 * (0.3 + uBeat + uKick * uMusic);
   vec3 prev = texture(uPrev, uv + disp).rgb;
 
-  float edge = smoothstep(0.0, 0.03 + 0.05 * uBass, v.x);
+  float edge = smoothstep(0.0, 0.03 + 0.05 * uBass + 0.08 * uSnare * uMusic, v.x);
   vec3 fill = palette(id + uTime * 0.03) * s * 0.7;
   vec3 col = mix(palette(id + 0.5) * 1.2, fill, edge) * (0.4 + s);
 
@@ -481,7 +502,7 @@ void main() {
   vec2 wob = 0.15 * vec2(wav(0.1), wav(0.6)) * uLevel;
   vec2 pen = 0.32 * vec2(sin(uTime * (0.8 + 2.0 * uSeed.y)), sin(uTime * (0.8 + 2.5 * uSeed.z))) + wob;
   vec2 pen2 = 0.32 * vec2(cos(uTime * 1.1), sin(uTime * 0.7 + 1.0)) - wob;
-  float blob = smoothstep(0.06 + 0.1 * uLevel, 0.0, length(p - pen));
+  float blob = smoothstep(0.06 + 0.1 * uLevel + 0.1 * uKick * uMusic, 0.0, length(p - pen));
   float blob2 = smoothstep(0.05 + 0.08 * uBass, 0.0, length(p - pen2));
   vec3 ink = palette(uTime * 0.05 + uBeatCount * 0.1) * blob + palette(0.5 + uTime * 0.03) * blob2;
 
@@ -507,7 +528,7 @@ void main() {
            - c;
   // the seed picks the Gray-Scott regime (spots, worms, mazes, coral); audio nudges it
   float f = 0.020 + 0.030 * uSeed.x + 0.02 * min(uBass, 1.0);
-  float k = 0.052 + 0.012 * uSeed.y + 0.006 * min(uMid, 1.0);
+  float k = 0.052 + 0.012 * uSeed.y + 0.006 * mix(min(uMid, 1.0), uCentroid, uMusic);
   float abb = c.x * c.y * c.y;
   vec2 n = c + vec2(lap.x - abb + f * (1.0 - c.x), 0.5 * lap.y + abb - (k + f) * c.y);
 
@@ -518,7 +539,7 @@ void main() {
   float w = wav(a) * 0.12 * uLevel;
   float ring = step(abs(r - 0.25 - w), 0.006) * step(0.05, uLevel);
   vec2 cell = floor(uv * vec2(12.0, 8.0));
-  float splash = step(0.985, hash21(cell + floor(uTime * 6.0))) * uBeat;
+  float splash = step(0.985, hash21(cell + floor(uTime * 6.0))) * max(uBeat, uKick * uMusic);
   n.y = max(n.y, 0.6 * max(ring, splash));
   fragColor = vec4(clamp(n, 0.0, 1.0), 0.0, 1.0);
 }`,
@@ -547,7 +568,7 @@ void main() {
   vec2 p = (uv - 0.5) * aspect();
   float sc = 1.5 + 3.0 * uSeed.x;
   vec2 q = vec2(fbm(p * sc + uTime * 0.1), fbm(p * sc + vec2(5.2, 1.3) - uTime * 0.07));
-  float warp = 0.5 + 2.0 * uBass + 2.0 * uSeed.y;
+  float warp = 0.5 + 2.0 * uBass + 2.0 * uSeed.y + 2.0 * uPerc * uMusic;
   vec2 r = vec2(fbm(p * sc + warp * q + vec2(1.7, 9.2) + 0.15 * uTime), fbm(p * sc + warp * q + vec2(8.3, 2.8)));
   float f = fbm(p * sc + warp * r);
   float s = spec(fract(f * 2.0) * 0.5);
@@ -585,7 +606,7 @@ void main() {
     col = palette(0.6 + 0.3 * fract(z * 0.1) + uTime * 0.05) * max(lineZ, lineX) * (0.6 + 0.8 * band);
     col *= 1.0 - smoothstep(2.0, 20.0, z);
     vec2 tile = floor(vec2(x * xs, z * zs - speed));
-    float glow = step(0.93 - 0.25 * uBeat, hash21(tile + floor(uBeatCount)));
+    float glow = step(0.93 - 0.25 * uBeat - 0.3 * uHat * uMusic, hash21(tile + floor(uBeatCount)));
     col += palette(hash21(tile)) * glow * 0.5 * uBeat;
   } else {
     float w = wav(uv.x * 0.5 + uTime * 0.02) * 0.05 * uLevel;
@@ -617,7 +638,7 @@ void main() {
   vec2 id = h.zw;
   float d = hexDist(h.xy);
   float band = spec(fract(hash21(id) * 3.0 + uSeed.y) * 0.5);
-  float flipT = step(0.97 - 0.2 * uBeat, hash21(id + floor(uBeatCount)));
+  float flipT = step(0.97 - 0.2 * max(uBeat, uSnare * uMusic), hash21(id + floor(uBeatCount)));
   float r = 0.5 * (0.3 + 0.7 * band);
   float fill = smoothstep(r, r - 0.06, d);
   float edge = smoothstep(0.5, 0.44, d) - smoothstep(0.46, 0.4, d);
@@ -636,7 +657,7 @@ void main() {
   vec2 p = (uv - 0.5) * aspect();
   float r = length(p);
   float a = atan(p.y, p.x);
-  float arms = 1.0 + floor(uSeed.x * 4.0);
+  float arms = 1.0 + floor(uSeed.x * 4.0) + floor(uChromaClarity * uMusic * 2.0);
   float tight = 3.0 + 6.0 * uSeed.y;
   float dir = sign(uSeed.w - 0.5);
   float sp = fract(log(r + 0.02) * tight + a * arms / 6.28318 + uTime * (0.2 + 0.6 * uLevel) * dir);
@@ -673,7 +694,8 @@ void main() {
   float on = step(0.15, band) * step(hash21(cell * 0.37), 0.4 + band * 0.6);
   float gl = glyph(cell, gf, code) * on;
   vec3 col = palette(cell.y / rows * 0.3 + uSeed.w + band * 0.4) * gl * (0.6 + band);
-  float inv = step(0.95 - 0.3 * uBeat, hash21(vec2(cell.y, floor(uTime * 8.0)))) * uBeat * uCorrupt;
+  float hit = max(uBeat, uSnare * uMusic);
+  float inv = step(0.95 - 0.3 * hit, hash21(vec2(cell.y, floor(uTime * 8.0)))) * hit * uCorrupt;
   col = mix(col, vec3(on) - col, inv);
   vec3 prev = texture(uPrev, uv + vec2(0.0, 2.0 / uRes.y)).rgb * uDecay * 0.85;
   fragColor = vec4(max(col, prev), 1.0);
@@ -687,7 +709,8 @@ void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
   vec2 p = (uv - 0.5) * aspect();
   // seconds since the last beat, recovered from the beat envelope
-  float age = clamp(-log(max(uBeat, 1e-4)) / 7.67, 0.0, 3.0);
+  float trig = mix(uBeat, uKick, uMusic);
+  float age = clamp(-log(max(trig, 1e-4)) / 7.67, 0.0, 3.0);
   vec2 c = (vec2(hash21(vec2(uBeatCount, 1.0)), hash21(vec2(uBeatCount, 2.0))) - 0.5) * vec2(0.8, 0.6) * (0.5 + uSeed.y);
   float d = length(p - c);
   float rad = age * (0.3 + 0.5 * uSeed.x);
@@ -695,7 +718,7 @@ void main() {
   float ang = atan(p.y - c.y, p.x - c.x);
   float spokes = pow(0.5 + 0.5 * cos(ang * (6.0 + floor(uSeed.z * 10.0)) + uBeatCount), 8.0)
                * (1.0 - smoothstep(0.0, rad + 0.01, d)) * exp(-age * 3.0);
-  vec3 burst = palette(hash21(vec2(uBeatCount, 3.0)) + uSeed.w) * (ring * 2.0 + spokes);
+  vec3 burst = palette(hash21(vec2(uBeatCount, 3.0)) + uSeed.w + uPitch * uMusic) * (ring * 2.0 + spokes);
   vec2 sg = vec2(60.0, 40.0);
   vec2 gc = floor(uv * sg), fc = fract(uv * sg);
   float star = step(0.97, hash21(gc + uSeed.xy)) * smoothstep(0.3, 0.0, length(fc - 0.5)) * (0.3 + uTreble);
@@ -712,7 +735,7 @@ void main() {
 void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
   float n = 12.0 + floor(uSeed.x * 24.0);
-  float scroll = uTime * (0.05 + 0.2 * uLevel) * sign(uSeed.w - 0.5);
+  float scroll = uTime * (0.05 + 0.2 * uLevel) * (sign(uSeed.w - 0.5) + uPan * uMusic);
   float env = smoothstep(0.0, 0.25, uv.x) * smoothstep(1.0, 0.75, uv.x);
   vec3 col = vec3(0.0);
   for (int i = 0; i < 40; i++) {
@@ -732,30 +755,65 @@ void main() {
   fragColor = vec4(max(col, prev), 1.0);
 }`,
   },
+  {
+    name: 'WATERFALL',
+    blurb: 'the last two seconds of spectrum as a waterfall, coloured by key',
+    src: `
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  float flip = uSeed.w > 0.5 ? 1.0 : -1.0;
+  float f = pow(uv.x, 1.5 + uSeed.x) * 0.6;
+  float age = flip > 0.0 ? uv.y : 1.0 - uv.y;
+  float s = hist(f, age);
+  float rows = 16.0 + floor(uSeed.y * 32.0);
+  float band = smoothstep(0.35, 0.5, abs(fract(age * rows) - 0.5)); // ruled rows
+  vec3 col = palette(uv.x * 0.6 + uSeed.z) * pow(s, 1.3) * (0.6 + 0.8 * s) * (0.6 + 0.4 * band);
+  float nowLine = smoothstep(0.012, 0.0, age) * (0.5 + uKick);
+  col += palette(0.2 + uKeyHue) * nowLine;
+  // bar lines march up the waterfall
+  float barLine = smoothstep(0.01, 0.0, abs(fract(age * 2.0 + uBarPhase) - 0.5)) * 0.25 * uMusic;
+  col += palette(0.7) * barLine;
+  vec3 prev = texture(uPrev, uv + vec2(0.0, 0.003 * flip * uPerc)).rgb * uDecay * 0.5;
+  fragColor = vec4(max(col, prev), 1.0);
+}`,
+  },
+  {
+    name: 'CHROMA',
+    blurb: 'twelve pitch-class wedges turning once per bar, the key at the centre',
+    src: `
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec2 p = (uv - 0.5) * aspect();
+  float r = length(p);
+  float a = atan(p.y, p.x) / 6.28318 + 0.5;
+  float rot = uBarPhase * (uSeed.w > 0.5 ? 1.0 : -1.0) * uMusic + uSeed.x + uTime * 0.01;
+  float w = fract(a + rot) * 12.0;
+  int pc = int(w);
+  float c = chroma(pc);
+  float wedge = smoothstep(0.5, 0.42, abs(fract(w) - 0.5));
+  float reach = 0.1 + 0.35 * c * (0.5 + 0.5 * uSeed.y);
+  float ring = smoothstep(0.02, 0.0, abs(r - reach));
+  float fill = step(r, reach) * wedge;
+  vec3 col = palette(float(pc) / 12.0 + uSeed.z) * (fill * (0.25 + 0.6 * c) + ring * 1.5);
+  col += palette(uKeyHue) * smoothstep(0.08 + 0.04 * uKick, 0.0, r) * (0.4 + uChromaClarity);
+  col += uDrop * uDrop * 0.5;
+  // beat-in-bar ticks around the rim
+  float tick = smoothstep(0.02, 0.0, abs(r - 0.48)) * step(0.5, fract(a * 4.0 + 0.5 - floor(uBarPhase * 4.0) * 0.25) + 0.5 - 0.5);
+  col += palette(0.5) * tick * 0.3 * uDownbeat;
+  vec2 fuv = (p * (1.0 - 0.02 * uKick)) / aspect() + 0.5;
+  vec3 prev = texture(uPrev, fuv).rgb * uDecay;
+  fragColor = vec4(max(col, prev), 1.0);
+}`,
+  },
 ];
 
 // Prelude for simulation shaders: same helpers, state comes in as uSim.
 export const SIM_PRELUDE = `#version 300 es
 precision highp float;
 uniform sampler2D uSim;
-uniform sampler2D uAudio;
-uniform vec2  uRes;
-uniform float uTime;
-uniform float uDt;
 uniform float uStep;
-uniform float uLevel;
-uniform float uBass;
-uniform float uMid;
-uniform float uTreble;
-uniform float uBeat;
-uniform float uBeatCount;
-uniform float uCorrupt;
-uniform float uDecay;
-uniform float uSens;
-uniform vec4  uSeed;
 out vec4 fragColor;
-float spec(float x) { return texture(uAudio, vec2(clamp(x, 0.0, 1.0), 0.25)).r; }
-float wav(float x)  { return texture(uAudio, vec2(fract(x), 0.75)).r * 2.0 - 1.0; }
+` + AUDIO_UNIFORMS + `
 float hash21(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
   p += dot(p, p + 45.32);
@@ -795,6 +853,7 @@ void main() {
 
 export const POST = `#version 300 es
 precision highp float;
+` + AUDIO_UNIFORMS + `
 uniform sampler2D uTex;
 uniform sampler2D uTex2;
 uniform sampler2D uTexB;
@@ -821,12 +880,6 @@ uniform float uMirrorMix; // 1 = settled on uMirror, < 1 = still blending from u
 uniform float uPixel;    // 0..1 pixelation
 uniform float uHue;      // 0..1 hue rotation
 uniform float uPoster;   // 0..1 posterisation
-uniform vec2  uRes;
-uniform float uTime;
-uniform float uBeat;
-uniform float uLevel;
-uniform float uTreble;
-uniform float uCorrupt;
 out vec4 fragColor;
 
 float hash21(vec2 p) {
@@ -862,11 +915,11 @@ vec3 layerIn(vec3 col, sampler2D t, sampler2D t2, float m, float alpha, int bl, 
   return mix(col, blended, alpha);
 }
 
-// kaleidoscope fold
+// kaleidoscope fold; stereo width and pan nudge the centre so wide mixes go asymmetric
 vec2 fold(vec2 uv, float m) {
   if (m < 2.0) return uv;
   vec2 asp = vec2(uRes.x / uRes.y, 1.0);
-  vec2 p = (uv - 0.5) * asp;
+  vec2 p = (uv - 0.5) * asp - vec2(uPan * uWidth * 0.15 * uMusic, 0.0);
   float k = 6.28318 / m;
   float a = abs(mod(atan(p.y, p.x) + 3.14159, k) - k * 0.5);
   p = vec2(cos(a), sin(a)) * length(p);
@@ -877,22 +930,26 @@ vec2 fold(vec2 uv, float m) {
 vec3 shade(vec2 uv) {
   float ft = floor(uTime * 24.0);
 
-  // pixelation
+  // kick pumps a zoom
+  uv = (uv - 0.5) * (1.0 - 0.04 * uKick * uMusic) + 0.5;
+
+  // pixelation, finer when the sound is bright
   if (uPixel > 0.0) {
-    float cells = mix(400.0, 20.0, uPixel);
+    float cells = mix(400.0, 20.0, uPixel) * (0.7 + 0.6 * uCentroid * uMusic);
     vec2 g = vec2(cells * uRes.x / uRes.y, cells);
     uv = (floor(uv * g) + 0.5) / g;
   }
 
-  // block shifts
+  // block shifts: snares tear, sharp transients tear harder
   float blockY = floor(uv.y * 20.0);
   float g = hash21(vec2(blockY, ft));
   float shift = 0.0;
-  if (g > 1.0 - uCorrupt * 0.25 * (0.25 + uBeat)) shift = (hash21(vec2(g, blockY)) - 0.5) * 0.2;
+  float tear = max(uBeat, uSnare * uMusic);
+  if (g > 1.0 - uCorrupt * 0.25 * (0.25 + tear)) shift = (hash21(vec2(g, blockY)) - 0.5) * 0.2 * (0.6 + 0.8 * uSharp);
   vec2 suv = uv + vec2(shift, 0.0);
 
-  // chromatic split, crossfading with the outgoing mode while uMix < 1
-  float ab = 0.0015 + 0.012 * uTreble * uCorrupt;
+  // chromatic split: treble and punch widen it, pan tilts it, drops slam it
+  float ab = (0.0015 + 0.012 * uTreble * uCorrupt) * (1.0 + (uPunch + 2.0 * uDrop * uDrop) * uMusic);
   vec3 col = fetch(uTex, suv, ab);
   if (uMix < 1.0) col = mix(fetch(uTex2, suv, ab), col, uMix);
 
@@ -900,15 +957,21 @@ vec3 shade(vec2 uv) {
   col = layerIn(col, uTexB, uTexB2, uMixB, uAlphaB, uBlend, uBlendFrom, uBlendMix, suv, ab);
   col = layerIn(col, uTexC, uTexC2, uMixC, uAlphaC, uBlendC, uBlendCFrom, uBlendCMix, suv, ab);
 
-  // scanlines, vignette, dither
+  // scanlines; vignette tightens during a build-up; grain follows noisiness; hats glint
   col *= 0.86 + 0.14 * sin(uv.y * uRes.y * 3.14159);
-  col *= 1.0 - 0.6 * pow(length(uv - 0.5) * 1.2, 3.0);
-  col += (hash21(gl_FragCoord.xy + uTime) - 0.5) / 48.0;
+  col *= 1.0 - 0.6 * (1.0 + 0.8 * uBuild * uMusic) * pow(length(uv - 0.5) * 1.2, 3.0);
+  col += (hash21(gl_FragCoord.xy + uTime) - 0.5) / 48.0 * (1.0 + 6.0 * uFlat * uMusic);
+  col += step(0.996 - 0.004 * uHat * uMusic, hash21(gl_FragCoord.xy * 0.7 + uTime * 7.0)) * 0.5 * uHat * uMusic;
+  // builds drain colour, drops flash
+  col = mix(col, vec3(dot(col, vec3(0.333))), 0.4 * uBuild * uMusic);
+  col += uDrop * uDrop * 0.6 * uMusic;
   col = clamp(col, 0.0, 1.0);
 
   // rare full inversion on hard beats
   float inv = step(0.96, hash21(vec2(floor(uTime * 8.0), 7.0))) * step(0.7, uBeat) * step(0.3, uCorrupt);
   col = mix(col, 1.0 - col, inv);
+  // silence dims everything toward black
+  col *= 1.0 - 0.85 * uSilence;
 
   // colour treatments
   if (uHue > 0.0) col = clamp(hueRotate(col, uHue * 6.28318), 0.0, 1.0);

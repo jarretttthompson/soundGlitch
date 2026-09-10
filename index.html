@@ -200,6 +200,24 @@
   <div class="slider"><span>FADE</span><input id="fade" type="range" min="0" max="10" step="0.1"><span id="fadeVal"></span><button class="lock" data-lock="fade"></button></div>
   <div class="slider"><span>RES</span><input id="res" type="range" min="0.2" max="1" step="0.05"><span id="resVal"></span><span></span></div>
 
+  <details id="musicSection" open>
+    <summary>MUSIC</summary>
+    <div class="body">
+      <div class="sub"><span id="keyTxt">KEY --</span><span id="barTxt">BAR --</span></div>
+      <div class="sub"><span id="toneTxt"></span></div>
+      <div class="flags">
+        <span class="flag" id="kick">KICK</span>
+        <span class="flag" id="snare">SNARE</span>
+        <span class="flag" id="hat">HAT</span>
+        <span class="flag" id="downbeatFlag">BAR</span>
+        <span class="flag" id="drop">DROP</span>
+      </div>
+      <div class="slider"><span>MUSIC</span><input id="music" type="range" min="0" max="1" step="0.01"><span id="musicVal"></span><button class="lock" data-lock="music"></button></div>
+      <div class="slider"><span>KEY</span><input id="keyColor" type="range" min="0" max="1" step="0.01"><span id="keyColorVal"></span><button class="lock" data-lock="keyColor"></button></div>
+      <div class="slider"><span>LOCK</span><input id="lock" type="range" min="0" max="1" step="0.01"><span id="lockVal"></span><button class="lock" data-lock="lock"></button></div>
+    </div>
+  </details>
+
   <details id="fxSection" open>
     <summary>FX</summary>
     <div class="body">

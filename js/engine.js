@@ -74,6 +74,12 @@ export class Engine {
     gl.bindTexture(gl.TEXTURE_2D, this.audioTex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 512, 2, 0, gl.RED, gl.UNSIGNED_BYTE, null);
     this._texParams();
+    // spectrum history, 64 rows
+    this.histTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.histTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 512, 64, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+    this._texParams();
+    this._histRowUploaded = -1;
 
     // source (image / camera)
     this.srcTex = gl.createTexture();
@@ -374,24 +380,47 @@ export class Engine {
 
   _setAudioUniforms(prog, audio, params, time, dt, seed) {
     const gl = this.gl;
+    const f = (name, v) => gl.uniform1f(this._u(prog, name), v);
     gl.uniform2f(this._u(prog, 'uRes'), this.canvas.width, this.canvas.height);
     // the seed also offsets time so every look starts at a different phase
-    gl.uniform1f(this._u(prog, 'uTime'), time + seed[0] * 977);
+    f('uTime', time + seed[0] * 977);
     gl.uniform4f(this._u(prog, 'uSeed'), seed[0], seed[1], seed[2], seed[3]);
-    gl.uniform1f(this._u(prog, 'uDt'), dt);
-    gl.uniform1f(this._u(prog, 'uLevel'), audio.level);
-    gl.uniform1f(this._u(prog, 'uBass'), audio.bass);
-    gl.uniform1f(this._u(prog, 'uMid'), audio.mid);
-    gl.uniform1f(this._u(prog, 'uTreble'), audio.treble);
-    gl.uniform1f(this._u(prog, 'uBeat'), audio.beat);
-    gl.uniform1f(this._u(prog, 'uBeatCount'), audio.beatCount);
-    gl.uniform1f(this._u(prog, 'uCorrupt'), params.corrupt);
-    gl.uniform1f(this._u(prog, 'uDecay'), this.decayEff(params));
-    gl.uniform1f(this._u(prog, 'uSens'), params.sens);
+    f('uDt', dt);
+    f('uLevel', audio.level); f('uBass', audio.bass); f('uMid', audio.mid); f('uTreble', audio.treble);
+    f('uBeat', audio.beat); f('uBeatCount', audio.beatCount);
+    f('uKick', audio.kick); f('uSnare', audio.snare); f('uHat', audio.hat);
+    f('uKickCount', audio.kickCount); f('uSnareCount', audio.snareCount); f('uHatCount', audio.hatCount);
+    f('uBar', audio.bar); f('uBarPhase', audio.barPhase); f('uBeatTime', audio.beatTime);
+    f('uPhrase', audio.phrase); f('uPhrasePhase', audio.phrasePhase); f('uDownbeat', audio.downbeat);
+    f('uDrop', audio.drop); f('uBuild', audio.build);
+    f('uPitch', audio.pitch); f('uKeyHue', audio.keyHue); f('uChromaClarity', audio.chromaClarity);
+    gl.uniform1fv(this._u(prog, 'uChroma'), audio.chroma);
+    f('uCentroid', audio.centroid); f('uFlat', audio.flatness); f('uHarm', audio.harm); f('uPerc', audio.perc);
+    f('uWidth', audio.width); f('uPan', audio.pan);
+    f('uSilence', audio.silence); f('uPunch', audio.punch); f('uSharp', audio.sharp);
+    f('uMusic', params.music ?? 0.7);
+    f('uKeyAmt', params.keyColor ?? 0);
+    f('uHistRow', audio.histRow);
+    f('uCorrupt', params.corrupt);
+    f('uDecay', this.decayEff(params, audio));
+    f('uSens', params.sens);
   }
 
-  // slider 0..1 maps to a usable per-frame persistence of 0.82..0.995
-  decayEff(params) { return 0.82 + 0.175 * Math.min(1, Math.max(0, params.decay)); }
+  // slider 0..1 maps to a usable per-frame persistence of 0.82..0.995;
+  // percussive passages shorten the trails a little, harmonic ones lengthen them
+  decayEff(params, audio) {
+    let d = 0.82 + 0.175 * Math.min(1, Math.max(0, params.decay));
+    if (audio) d += (0.01 * audio.harm - 0.025 * audio.perc) * (params.music ?? 0.7);
+    return Math.min(0.996, Math.max(0.8, d));
+  }
+
+  _uploadHist(audio) {
+    if (audio.histRow === this._histRowUploaded) return;
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.histTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 512, 64, gl.RED, gl.UNSIGNED_BYTE, audio.hist);
+    this._histRowUploaded = audio.histRow;
+  }
 
   _stepSim(L, modeIndex, audio, params, time, dt) {
     const gl = this.gl;
@@ -402,8 +431,11 @@ export class Engine {
     gl.viewport(0, 0, w, h);
     gl.uniform1i(this._u(prog, 'uSim'), 0);
     gl.uniform1i(this._u(prog, 'uAudio'), 1);
+    gl.uniform1i(this._u(prog, 'uHist'), 3);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.audioTex);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, this.histTex);
     this._setAudioUniforms(prog, audio, params, time, dt, L.seed);
     gl.uniform2f(this._u(prog, 'uRes'), w, h);
     for (let s = 0; s < SIM_STEPS; s++) {
@@ -431,9 +463,12 @@ export class Engine {
     gl.bindTexture(gl.TEXTURE_2D, this.audioTex);
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, L.sim ? L.sim[L.simRead].tex : this.audioTex);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, this.histTex);
     gl.uniform1i(this._u(prog, 'uPrev'), 0);
     gl.uniform1i(this._u(prog, 'uAudio'), 1);
     gl.uniform1i(this._u(prog, 'uSim'), 2);
+    gl.uniform1i(this._u(prog, 'uHist'), 3);
     this._setAudioUniforms(prog, audio, params, time, dt, seed);
     gl.uniform1i(this._u(prog, 'uPalette'), palMix > 0 ? L.palFrom : L.palette);
     gl.uniform1i(this._u(prog, 'uPaletteTo'), L.palette);
@@ -495,11 +530,12 @@ export class Engine {
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.audioTex);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 512, 2, gl.RED, gl.UNSIGNED_BYTE, audio.tex);
+    this._uploadHist(audio);
     if (this.srcKind === 'video') this._uploadVideo();
 
     const hasSrc = this.srcKind !== 'none';
     // burn amount scaled so the steady state stays around the source's own brightness
-    const burn = hasSrc && this.src.burn > 0 ? this.src.burn * (1 - this.decayEff(params)) * 1.5 : 0;
+    const burn = hasSrc && this.src.burn > 0 ? this.src.burn * (1 - this.decayEff(params, audio)) * 1.5 : 0;
 
     const A = this._renderLayer(this.layers[0], audio, params, time, dt, burn);
     const B = this._renderLayer(this.layers[1], audio, params, time, dt, 0);
@@ -518,6 +554,8 @@ export class Engine {
     bind(4, this.srcTex);
     bind(5, C ? C.tex : A.tex);
     bind(6, C ? C.outTex : A.tex);
+    bind(7, this.audioTex);
+    bind(8, this.histTex);
     gl.uniform1i(this._u(P, 'uTex'), 0);
     gl.uniform1i(this._u(P, 'uTex2'), 1);
     gl.uniform1i(this._u(P, 'uTexB'), 2);
@@ -525,6 +563,9 @@ export class Engine {
     gl.uniform1i(this._u(P, 'uSrc'), 4);
     gl.uniform1i(this._u(P, 'uTexC'), 5);
     gl.uniform1i(this._u(P, 'uTexC2'), 6);
+    gl.uniform1i(this._u(P, 'uAudio'), 7);
+    gl.uniform1i(this._u(P, 'uHist'), 8);
+    this._setAudioUniforms(P, audio, params, time, dt, this.layers[0].seed);
     gl.uniform1f(this._u(P, 'uMix'), A.mix);
     gl.uniform1f(this._u(P, 'uMixB'), B ? B.mix : 1);
     gl.uniform1f(this._u(P, 'uAlphaB'), B ? B.alpha : 0);
@@ -545,12 +586,7 @@ export class Engine {
     gl.uniform1f(this._u(P, 'uPixel'), this.fx.pixel);
     gl.uniform1f(this._u(P, 'uHue'), this.fx.hue);
     gl.uniform1f(this._u(P, 'uPoster'), this.fx.poster);
-    gl.uniform2f(this._u(P, 'uRes'), w, h);
-    gl.uniform1f(this._u(P, 'uTime'), time);
-    gl.uniform1f(this._u(P, 'uBeat'), audio.beat);
-    gl.uniform1f(this._u(P, 'uLevel'), audio.level);
-    gl.uniform1f(this._u(P, 'uTreble'), audio.treble);
-    gl.uniform1f(this._u(P, 'uCorrupt'), params.corrupt);
+    gl.uniform1f(this._u(P, 'uTime'), time); // post uses plain time, not the seeded one
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
     this.frame++;

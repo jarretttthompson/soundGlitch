@@ -8,6 +8,7 @@ import { Link } from './link.js';
 const PALETTES = ['SPECTRUM', 'ACID', 'PHOSPHOR', 'HEAT', 'BRUISE', 'STROBE',
                   'VAPOR', 'ICE', 'AMBER', 'TOXIC', 'BLOOD', 'CGA'];
 const BLENDS = ['MIX', 'ADD', 'MULTIPLY', 'SCREEN', 'DIFFERENCE', 'LIGHTEN'];
+const KEY_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const STORE = 'soundglitch.params';
 const ROLE = new URLSearchParams(location.search).has('output') ? 'output' : 'controller';
 
@@ -26,6 +27,7 @@ try {
 
 const DEFAULTS = {
   mode: 0, palette: 0, corrupt: 0.5, decay: 0.65, sens: 1.0, focus: 0.5, dynamics: 0.6,
+  music: 0.7, keyColor: 0.5, lock: 0.6,
   auto: false, cycleScenes: false, randomCycle: false, cycle: 16, fade: 4, res: 0.7,
   layerB: -1, blend: 1, paletteB: -1,
   layerC: -1, blendC: 3, paletteC: -1,
@@ -41,12 +43,14 @@ const LOCK_GROUPS = {
   layerB: ['layerB'], blend: ['blend'], paletteB: ['paletteB'],
   layerC: ['layerC'], blendC: ['blendC'], paletteC: ['paletteC'],
   corrupt: ['corrupt'], decay: ['decay'], sens: ['sens'], focus: ['focus'], dynamics: ['dynamics'],
+  music: ['music'], keyColor: ['keyColor'], lock: ['lock'],
   cycle: ['cycle'], fade: ['fade'],
   mirror: ['mirror'], pixel: ['pixel'], hue: ['hue'], poster: ['poster'],
   srcBurn: ['srcBurn'], srcOpacity: ['srcOpacity'], srcSize: ['srcSize'], srcX: ['srcX'], srcY: ['srcY'],
 };
 // locked out of the box: transport and input settings, and the source placement
-const DEFAULT_LOCKS = { fade: true, focus: true, dynamics: true, srcBurn: true, srcOpacity: true, srcSize: true, srcX: true, srcY: true };
+const DEFAULT_LOCKS = { fade: true, focus: true, dynamics: true, music: true, keyColor: true, lock: true,
+                        srcBurn: true, srcOpacity: true, srcSize: true, srcX: true, srcY: true };
 function locked(key) {
   for (const [lock, keys] of Object.entries(LOCK_GROUPS)) if (params.locks[lock] && keys.includes(key)) return true;
   return false;
@@ -61,7 +65,7 @@ const SCENE_KEYS = ['mode', 'palette', 'corrupt', 'decay', 'sens', 'focus', 'cyc
                     'seed', 'seedB', 'seedC', 'mirror', 'pixel', 'hue', 'poster',
                     'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY'];
 // continuous values that glide to a new target over the fade time instead of jumping
-const TWEEN_KEYS = ['corrupt', 'decay', 'sens', 'focus', 'pixel', 'hue', 'poster', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY'];
+const TWEEN_KEYS = ['corrupt', 'decay', 'sens', 'focus', 'music', 'keyColor', 'lock', 'pixel', 'hue', 'poster', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY'];
 const rand4 = () => [Math.random(), Math.random(), Math.random(), Math.random()];
 // recently used modes / palettes are avoided by RANDOM so runs don't repeat
 const recentModes = [], recentPals = [];
@@ -235,6 +239,9 @@ function randomize() {
   target.fade = [0.5, 1, 2, 3, 4, 6][pick(6)];
   target.focus = +r(0, 1).toFixed(2);
   target.dynamics = +r(0.2, 1).toFixed(2);
+  target.music = +r(0.3, 1).toFixed(2);
+  target.keyColor = +r(0, 1).toFixed(2);
+  target.lock = +r(0, 1).toFixed(2);
   if (engine.srcKind !== 'none') {
     target.srcBurn = chance(0.5) ? 0 : +r(0.2, 1).toFixed(2);
     target.srcOpacity = chance(0.4) ? 0 : +r(0.2, 0.8).toFixed(2);
@@ -339,7 +346,7 @@ palCSel.addEventListener('change', () => setPaletteC(+palCSel.value));
 palCSel.addEventListener('mousedown', e => { if (midi.learning) { e.preventDefault(); midi.arm('palCSel'); } });
 
 const sliders = {};
-for (const k of ['corrupt', 'decay', 'sens', 'focus', 'dynamics', 'cycle', 'fade', 'res', 'mirror', 'pixel', 'hue', 'poster', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY']) {
+for (const k of ['corrupt', 'decay', 'sens', 'focus', 'dynamics', 'music', 'keyColor', 'lock', 'cycle', 'fade', 'res', 'mirror', 'pixel', 'hue', 'poster', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY']) {
   const el = $(`#${k}`);
   sliders[k] = el;
   el.dataset.target = k;
@@ -820,9 +827,12 @@ function frame(now) {
   audio.update();
   if (ROLE === 'controller') stepTween(dt);
   engine.resize();
-  // dynamics: soft sound slows the drift and calms the corruption as well as the reaction
+  // dynamics: soft sound slows the drift and calms the corruption as well as the reaction;
+  // LOCK makes the drift rate follow the tempo (120 BPM = 1x) when the tracker is confident
   const calm = lerp(1, 0.25 + 0.75 * audio.energy, params.dynamics);
-  visTime += dt * calm;
+  const tempoOk = audio.tempoConf > 0.3 && audio.bpm > 0 && audio.mode !== 'off';
+  const rate = tempoOk ? lerp(1, Math.min(2, Math.max(0.4, audio.bpm / 120)), params.lock) : 1;
+  visTime += dt * calm * rate;
   const renderParams = calm < 0.999 ? Object.assign({}, params, { corrupt: params.corrupt * calm }) : params;
   engine.render(audio, renderParams, visTime, dt);
   if (ROLE === 'controller') link.sendAudio(audio.features());
@@ -833,10 +843,19 @@ function frame(now) {
     $('#tick').classList.toggle('hit', audio.tempoBeat > 0.5);
     $('#clip').classList.toggle('hit', audio.clip);
     $('#music').classList.toggle('hit', audio.music > 0.5);
+    $('#kick').classList.toggle('hit', audio.kick > 0.5);
+    $('#snare').classList.toggle('hit', audio.snare > 0.5);
+    $('#hat').classList.toggle('hit', audio.hat > 0.5);
+    $('#drop').classList.toggle('hit', audio.drop > 0.3);
+    $('#downbeatFlag').classList.toggle('hit', audio.downbeat > 0.5);
     if ((engine.frame & 15) === 0) {
       $('#tempoTxt').textContent = audio.bpm && audio.tempoConf > 0.2 ? `${Math.round(audio.bpm)} BPM` : '-- BPM';
       $('#music').textContent = `MUSIC ${Math.round(audio.music * 100)}%`;
       $('#tick').textContent = audio.tempoConf > 0.2 ? `TEMPO ${Math.round(audio.tempoConf * 100)}%` : 'TEMPO';
+      const tempoOk = audio.tempoConf > 0.2;
+      $('#keyTxt').textContent = `KEY ${audio.chromaClarity > 0.15 ? KEY_NAMES[audio.key] : '--'}`;
+      $('#barTxt').textContent = tempoOk ? `BAR ${audio.bar}.${audio.beatInBar + 1}  PHRASE ${audio.phrase}` : 'BAR --';
+      $('#toneTxt').textContent = `BRIGHT ${Math.round(audio.centroid * 100)}  NOISE ${Math.round(audio.flatness * 100)}  WIDTH ${Math.round(audio.width * 100)}  BUILD ${Math.round(audio.build * 100)}`;
     }
 
     // auto-cycle: every CYCLE beats, or a time fallback; when the tempo tracker

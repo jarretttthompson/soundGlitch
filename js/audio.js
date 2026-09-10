@@ -1,3 +1,13 @@
+const REMOTE_KEYS = [
+  'level', 'bass', 'mid', 'treble', 'beat', 'beatCount', 'clip',
+  'bpm', 'tempoConf', 'beatPhase', 'tempoBeat', 'tempoBeatCount', 'music', 'energy',
+  'kick', 'snare', 'hat', 'kickCount', 'snareCount', 'hatCount',
+  'bar', 'beatInBar', 'barPhase', 'phrase', 'phrasePhase', 'downbeat', 'beatTime',
+  'build', 'drop', 'dropCount',
+  'key', 'keyHue', 'chromaClarity', 'pitchHz', 'pitch', 'centroid', 'flatness', 'harm', 'perc',
+  'width', 'pan', 'silence', 'punch', 'sharp',
+];
+
 // Audio input and analysis.
 // Sources: microphone (any input device), system audio (tab/screen share),
 // a silent synthetic test signal, or features mirrored from a controller
@@ -56,8 +66,53 @@ export class AudioIn {
     this._loudRef = -60;   // slowly decaying peak in dB
     this.loudRange = 30;   // dB below the reference that counts as silent
 
-    this._peak = { level: 0.05, bass: 0.05, mid: 0.05, treble: 0.05, wave: 0.05, spec: 60 };
-    this._floor = { level: 0, bass: 0, mid: 0, treble: 0 };
+    // per-band onsets: kick (sub/bass), snare (low mids burst), hat (top end)
+    this.kick = 0; this.snare = 0; this.hat = 0;
+    this.kickCount = 0; this.snareCount = 0; this.hatCount = 0;
+    this._bands = {
+      kick:  { lo: 1, hi: 7, hist: new Float32Array(30), i: 0, last: 0, gap: 120, decay: 0.88 },
+      snare: { lo: 9, hi: 90, hist: new Float32Array(30), i: 0, last: 0, gap: 110, decay: 0.85 },
+      hat:   { lo: 230, hi: 700, hist: new Float32Array(30), i: 0, last: 0, gap: 60, decay: 0.72 },
+    };
+    this._prevFreqAll = new Uint8Array(1024);
+
+    // bars and phrases (from the tempo tracker plus kick accents)
+    this.bar = 0; this.beatInBar = 0; this.barPhase = 0;
+    this.phrase = 0; this.phrasePhase = 0; this.downbeat = 0;
+    this.beatTime = 0;         // continuous beats, for phase-locked motion
+    this._beatAcc = new Float32Array(4);
+    this._downbeatPos = 0;
+    this._lastTickCount = 0;
+
+    // build / drop
+    this.build = 0; this.drop = 0; this.dropCount = 0;
+    this._eShort = 0; this._eLong = 0; this._subSlow = 0; this._buildPeak = 0; this._lastDrop = 0;
+
+    // tone
+    this.chroma = new Float32Array(12);
+    this.key = 0; this.keyHue = 0; this.chromaClarity = 0;
+    this._keyCand = 0; this._keyRun = 0;
+    this.pitchHz = 0; this.pitch = 0;
+    this.centroid = 0; this.flatness = 0; this.harm = 0; this.perc = 0;
+    this._mags = new Float32Array(512);
+    this._binPc = null; this._binHz = null;
+    this._fluxPeak = 0.01;
+
+    // space, silence, envelope shape
+    this.width = 0; this.pan = 0;
+    this.analyserL = null; this.analyserR = null;
+    this._timeL = new Float32Array(1024); this._timeR = new Float32Array(1024);
+    this.silence = 0; this._silentSince = 0;
+    this.punch = 0; this._fast = 0; this._slow = 0;
+    this.sharp = 0; this._prevNl = 0;
+
+    // spectrum history: 64 rows of the spectrum texture row, ~2 s at 30 rows/s
+    this.hist = new Uint8Array(512 * 64);
+    this.histRow = 0;
+    this._histTick = 0;
+
+    this._peak = { level: 0.05, bass: 0.05, mid: 0.05, treble: 0.05, wave: 0.05, spec: 60, sub: 0.05 };
+    this._floor = { level: 0, bass: 0, mid: 0, treble: 0, sub: 0 };
     this._specFloor = new Float32Array(512);
     this._specTmp = new Float32Array(512);
     this._hist = new Float32Array(40);
@@ -75,6 +130,20 @@ export class AudioIn {
       this.analyser = this.ctx.createAnalyser();
       this.analyser.fftSize = 2048;
       this.analyser.smoothingTimeConstant = 0.55;
+      for (const side of ['L', 'R']) {
+        const a = this.ctx.createAnalyser();
+        a.fftSize = 1024;
+        this['analyser' + side] = a;
+      }
+      // bin -> frequency and pitch class (C = 0) for chroma and pitch
+      const sr = this.ctx.sampleRate;
+      this._binHz = new Float32Array(512);
+      this._binPc = new Int8Array(512);
+      for (let i = 0; i < 512; i++) {
+        const hz = i * sr / 2048;
+        this._binHz[i] = hz;
+        this._binPc[i] = i >= 2 && hz < 8000 ? ((Math.round(12 * Math.log2(hz / 440)) % 12) + 12 + 9) % 12 : -1;
+      }
     }
     if (this.ctx.state === 'suspended') await this.ctx.resume();
   }
@@ -141,6 +210,11 @@ export class AudioIn {
     this.stream = stream;
     this.source = this.ctx.createMediaStreamSource(stream);
     this.source.connect(this.analyser);
+    // stereo taps (a mono source is upmixed, so L = R and width reads 0)
+    this._split = this.ctx.createChannelSplitter(2);
+    this.source.connect(this._split);
+    this._split.connect(this.analyserL, 0);
+    this._split.connect(this.analyserR, 1);
     this.mode = mode;
     const track = stream.getAudioTracks()[0];
     if (track) track.onended = () => { if (this.mode === mode) this.stop(); };
@@ -209,6 +283,7 @@ export class AudioIn {
 
   stop(setOff = true) {
     if (this.source) { try { this.source.disconnect(); } catch (_) {} this.source = null; }
+    if (this._split) { try { this._split.disconnect(); } catch (_) {} this._split = null; }
     if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
     if (this.test) {
       clearInterval(this.test.timer);
@@ -222,23 +297,22 @@ export class AudioIn {
   // Features mirrored from a controller window (output mode).
   applyRemote(m) {
     this.mode = 'remote';
-    this.level = m.level; this.bass = m.bass; this.mid = m.mid; this.treble = m.treble;
-    this.beat = m.beat; this.beatCount = m.beatCount; this.clip = m.clip;
-    this.bpm = m.bpm; this.tempoConf = m.tempoConf; this.beatPhase = m.beatPhase;
-    this.tempoBeat = m.tempoBeat; this.tempoBeatCount = m.tempoBeatCount; this.music = m.music;
-    if (typeof m.energy === 'number') this.energy = m.energy;
-    if (m.tex) this.tex.set(m.tex);
+    for (const k of REMOTE_KEYS) if (typeof m[k] === 'number') this[k] = m[k];
+    if (m.chroma) this.chroma.set(m.chroma);
+    if (m.tex) { this.tex.set(m.tex); this._pushHist(); }
   }
 
   features() {
-    return {
-      level: this.level, bass: this.bass, mid: this.mid, treble: this.treble,
-      beat: this.beat, beatCount: this.beatCount, clip: this.clip,
-      bpm: this.bpm, tempoConf: this.tempoConf, beatPhase: this.beatPhase,
-      tempoBeat: this.tempoBeat, tempoBeatCount: this.tempoBeatCount, music: this.music,
-      energy: this.energy,
-      tex: this.tex,
-    };
+    const f = { tex: this.tex, chroma: this.chroma };
+    for (const k of REMOTE_KEYS) f[k] = this[k];
+    return f;
+  }
+
+  // one spectrum row into the history every other frame (~30 rows/s)
+  _pushHist() {
+    if ((this._histTick++ & 1) !== 0) return;
+    this.histRow = (this.histRow + 1) % 64;
+    this.hist.set(this.tex.subarray(0, 512), this.histRow * 512);
   }
 
   // ---- analysis ----------------------------------------------------------
@@ -280,11 +354,16 @@ export class AudioIn {
       this.beat *= Math.pow(0.88, q);
       this.tempoBeat *= Math.pow(0.85, q);
       this.energy += (0.5 - this.energy) * k;
+      this.kick *= Math.pow(0.88, q); this.snare *= Math.pow(0.85, q); this.hat *= Math.pow(0.72, q);
+      this.drop *= Math.pow(0.97, q); this.build *= Math.pow(0.99, q); this.silence *= Math.pow(0.98, q);
+      this.beatTime += dt * 2;     // a 120 BPM idle clock
+      this.barPhase = (this.beatTime / 4) % 1;
       for (let i = 0; i < 512; i++) {
         const f = i / 512;
         this.tex[i] = (255 * 0.55 * Math.exp(-f * 9) * (0.6 + 0.4 * pulse) * (0.7 + 0.3 * Math.sin(i * 0.4 + t))) | 0;
         this.tex[512 + i] = ((Math.sin(f * 12.566 + t * 2) * 0.35 * (0.5 + pulse) * 0.5 + 0.5) * 255) | 0;
       }
+      this._pushHist();
       return;
     }
 
@@ -383,6 +462,168 @@ export class AudioIn {
       const v = Math.max(-1, Math.min(1, this.time[i * 4] * g));
       this.tex[512 + i] = ((v * 0.5 + 0.5) * 255) | 0;
     }
+    this._pushHist();
+
+    this._analyseMore(now, dt, q, nl, sub, rm);
+  }
+
+  // ---- the rest of the feature set ---------------------------------------
+
+  _analyseMore(now, dt, q, nl, sub, rm) {
+    const F = this.freq;
+
+    // per-band onsets on positive spectral flux, each against its own recent mean
+    for (const [name, b] of Object.entries(this._bands)) {
+      let flux = 0;
+      for (let i = b.lo; i < b.hi; i++) { const d = F[i] - this._prevFreqAll[i]; if (d > 0) flux += d; }
+      flux /= (b.hi - b.lo) * 255;
+      let mean = 0;
+      for (let i = 0; i < b.hist.length; i++) mean += b.hist[i];
+      mean /= b.hist.length;
+      b.hist[b.i] = flux;
+      b.i = (b.i + 1) % b.hist.length;
+      if (flux > mean * 1.6 + 0.01 && flux > 0.02 && now - b.last > b.gap) {
+        b.last = now;
+        this[name] = 1;
+        this[name + 'Count']++;
+      } else {
+        this[name] *= Math.pow(b.decay, q);
+      }
+    }
+    // total flux for the percussive measure, before the previous frame is overwritten
+    let fluxAll = 0;
+    for (let i = 1; i < 300; i++) { const d = F[i] - this._prevFreqAll[i]; if (d > 0) fluxAll += d; }
+    fluxAll /= 299 * 255;
+    for (let i = 1; i < 700; i++) this._prevFreqAll[i] = F[i];
+
+    // bars: accumulate kick strength per beat position, the strongest is the downbeat
+    if (this.tempoBeatCount !== this._lastTickCount) {
+      const pos = this.tempoBeatCount % 4;
+      this._beatAcc[pos] = this._beatAcc[pos] * 0.9 + this.kick + this.bass * 0.3;
+      let best = 0;
+      for (let i = 1; i < 4; i++) if (this._beatAcc[i] > this._beatAcc[best]) best = i;
+      this._downbeatPos = best;
+      this._lastTickCount = this.tempoBeatCount;
+      if (((this.tempoBeatCount - this._downbeatPos) % 4 + 4) % 4 === 0) this.downbeat = 1;
+    }
+    if (this._period > 0 && this.tempoConf > 0.2) {
+      const rel = this.tempoBeatCount - this._downbeatPos;
+      this.beatInBar = ((rel % 4) + 4) % 4;
+      this.bar = Math.floor(rel / 4);
+      this.barPhase = (this.beatInBar + this.beatPhase) / 4;
+      this.beatTime = this.tempoBeatCount + this.beatPhase;
+    } else {
+      this.beatTime += dt * 2;
+      this.barPhase = (this.beatTime / 4) % 1;
+    }
+    this.phrase = Math.floor(this.bar / 8);
+    this.phrasePhase = ((((this.bar % 8) + 8) % 8) + this.barPhase) / 8;
+    this.downbeat *= Math.pow(0.9, q);
+
+    // build: energy rising over bars; drop: sub-bass slams back in after a build
+    const e = this.energy;
+    this._eShort += (e - this._eShort) * (1 - Math.pow(0.97, q));
+    this._eLong += (e - this._eLong) * (1 - Math.pow(0.997, q));
+    const buildRaw = Math.max(0, Math.min(1, (this._eShort - this._eLong) * 4));
+    this.build += (buildRaw - this.build) * (1 - Math.pow(0.95, q));
+    this._buildPeak = Math.max(this.build, this._buildPeak * Math.pow(0.995, q));
+    const subN = Math.min(1.5, this._norm('sub', sub, q));
+    this._subSlow += (subN - this._subSlow) * (1 - Math.pow(0.98, q));
+    if (subN > this._subSlow * 2 + 0.2 && this._buildPeak > 0.3 && now - this._lastDrop > 4000 && this.tempoConf > 0.15) {
+      this._lastDrop = now;
+      this.drop = 1;
+      this.dropCount++;
+      this._buildPeak = 0;
+    } else {
+      this.drop *= Math.pow(0.97, q);
+    }
+
+    // linear magnitudes from the byte spectrum (-100..-30 dB)
+    const mags = this._mags;
+    let sumMag = 0, sumHzMag = 0, sumLog = 0;
+    for (let i = 1; i < 512; i++) {
+      const m = Math.pow(10, (-100 + F[i] / 255 * 70) / 20);
+      mags[i] = m;
+      sumMag += m;
+      sumHzMag += m * this._binHz[i];
+      sumLog += Math.log(m + 1e-9);
+    }
+    // centroid on a log scale: 100 Hz -> 0, 6.4 kHz -> 1
+    const cHz = sumHzMag / (sumMag + 1e-9);
+    const cRaw = Math.max(0, Math.min(1, Math.log2(Math.max(cHz, 1) / 100) / 6));
+    this.centroid += (cRaw - this.centroid) * (1 - Math.pow(0.9, q));
+    // flatness: geometric over arithmetic mean, 1 = white noise
+    const gm = Math.exp(sumLog / 511), am = sumMag / 511;
+    const flatRaw = Math.max(0, Math.min(1, gm / (am + 1e-9)));
+    this.flatness += (flatRaw - this.flatness) * (1 - Math.pow(0.9, q));
+
+    // chroma: pitch-class energy, normalised; key = steadiest strongest class
+    const ch = this.chroma;
+    const acc = new Float32Array(12);
+    for (let i = 2; i < 400; i++) { const pc = this._binPc[i]; if (pc >= 0) acc[pc] += mags[i]; }
+    let mx = 1e-9, mean = 0;
+    for (let i = 0; i < 12; i++) { if (acc[i] > mx) mx = acc[i]; mean += acc[i]; }
+    mean /= 12;
+    for (let i = 0; i < 12; i++) ch[i] += (acc[i] / mx - ch[i]) * (1 - Math.pow(0.85, q));
+    const clar = Math.max(0, Math.min(1, (mx - mean) / mx));
+    this.chromaClarity += (clar - this.chromaClarity) * (1 - Math.pow(0.9, q));
+    let cand = 0;
+    for (let i = 1; i < 12; i++) if (ch[i] > ch[cand]) cand = i;
+    if (cand === this._keyCand) this._keyRun += q; else { this._keyCand = cand; this._keyRun = 0; }
+    if (this._keyRun > 25 && cand !== this.key) this.key = cand;
+    this.keyHue = this.key / 12;
+
+    // dominant pitch with parabolic interpolation, 55 Hz -> 0, 3.5 kHz -> 1
+    let pk = 2;
+    for (let i = 3; i < 400; i++) if (F[i] > F[pk]) pk = i;
+    if (F[pk] > 40) {
+      const a = F[pk - 1], b = F[pk], c = F[pk + 1];
+      const off = (a - c) / (2 * (a - 2 * b + c) || 1);
+      const hz = (pk + Math.max(-1, Math.min(1, off))) * this._binHz[1];
+      this.pitchHz = hz;
+      const pRaw = Math.max(0, Math.min(1, Math.log2(hz / 55) / 6));
+      this.pitch += (pRaw - this.pitch) * (1 - Math.pow(0.8, q));
+    }
+
+    // harmonic vs percussive: percussive = normalised total flux, harmonic = tonal steady energy
+    this._fluxPeak = Math.max(fluxAll, this._fluxPeak * Math.pow(0.999, q), 0.01);
+    const percRaw = Math.min(1, fluxAll / this._fluxPeak);
+    this.perc += (percRaw - this.perc) * (percRaw > this.perc ? 0.5 : 1 - Math.pow(0.9, q));
+    const harmRaw = Math.max(0, Math.min(1, nl)) * (1 - this.flatness) * (1 - 0.5 * this.perc);
+    this.harm += (harmRaw - this.harm) * (1 - Math.pow(0.9, q));
+
+    // stereo width and pan
+    if (this.analyserL && this.analyserR) {
+      this.analyserL.getFloatTimeDomainData(this._timeL);
+      this.analyserR.getFloatTimeDomainData(this._timeR);
+      let l2 = 0, r2 = 0, m2 = 0, s2 = 0;
+      for (let i = 0; i < 1024; i++) {
+        const l = this._timeL[i], r = this._timeR[i];
+        l2 += l * l; r2 += r * r;
+        const m = (l + r) * 0.5, s = (l - r) * 0.5;
+        m2 += m * m; s2 += s * s;
+      }
+      const wRaw = Math.min(1, Math.sqrt(s2) / (Math.sqrt(m2) + 1e-6));
+      const pRaw = (Math.sqrt(r2) - Math.sqrt(l2)) / (Math.sqrt(l2) + Math.sqrt(r2) + 1e-6);
+      this.width += (wRaw - this.width) * (1 - Math.pow(0.9, q));
+      this.pan += (pRaw - this.pan) * (1 - Math.pow(0.9, q));
+    }
+
+    // silence: well below the loudness reference for a while
+    if (this.loudDb < this._loudRef - 40) this._silentSince += dt; else this._silentSince = 0;
+    const silRaw = Math.max(0, Math.min(1, (this._silentSince - 1.5) / 2));
+    this.silence += (silRaw - this.silence) * (1 - Math.pow(0.95, q));
+
+    // punch: fast envelope over slow envelope
+    this._fast = Math.max(nl, this._fast * Math.pow(0.85, q));
+    this._slow += (nl - this._slow) * (1 - Math.pow(0.97, q));
+    const punchRaw = Math.max(0, Math.min(1, (this._fast / (this._slow + 0.05) - 1) * 0.5));
+    this.punch += (punchRaw - this.punch) * (1 - Math.pow(0.8, q));
+
+    // transient sharpness: how steeply the level rises
+    const dl = nl - this._prevNl;
+    this._prevNl = nl;
+    this.sharp = Math.max(dl > 0.05 ? Math.min(1, dl * 3) : 0, this.sharp * Math.pow(0.95, q));
   }
 
   // ---- tempo -------------------------------------------------------------

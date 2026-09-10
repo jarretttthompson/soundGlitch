@@ -53,6 +53,29 @@ seconds after starting to settle.
   speed, the corruption and the auto-cycle rate all follow the loudness.
   The reference forgets slowly, about 30 dB over 75 s, so a quiet song after
   a loud one stays calm, and a quiet set calibrates itself within a minute.
+- MUSIC section. The analyser also tracks per-band onsets (kick, snare,
+  hat), bars and 8-bar phrases with a downbeat estimate, build-ups and
+  drops, the key and a 12-class chroma, dominant pitch, spectral centroid
+  (brightness), flatness (noisiness), harmonic-versus-percussive balance,
+  stereo width and pan, silence, envelope punch and transient sharpness,
+  plus a two-second spectrum history. The readouts show key, bar and
+  phrase, and the flags light on kick, snare, hat, bar line and drop.
+  - MUSIC is how much those mappings apply. Globally: kicks pump a zoom,
+    snares tear blocks, hats glint, drops flash and slam the chroma split,
+    builds tighten the vignette and drain colour, noisiness adds grain,
+    brightness sharpens pixelation, pan tilts the chroma split and stereo
+    width skews the kaleidoscope, percussive passages shorten trails,
+    harmonic ones lengthen them, and silence fades to black. Every mode
+    also has its own hooks, for example RIPPLE shockwaves on kicks, HEX and
+    GLYPH flip on snares, RADAR blips brighten on hats, ORACLE changes its
+    segments per bar, REACT's regime follows brightness, FLARE colours by
+    pitch, RIDGE scrolls with pan.
+  - KEY shifts every palette by the song's key, so a track in E is a
+    different colour from one in B flat and chord changes move the hues.
+  - LOCK ties the drift speed of the shaders to the tempo (120 BPM is 1x)
+    when the tracker is confident, so motion runs at the music's rate.
+  - WATERFALL and CHROMA are modes built directly on the history texture
+    and the pitch classes.
 - FADE is the crossfade length for mode and palette changes, 0 (hard cut)
   to 10 s. During a mode fade the outgoing mode keeps running on its own
   buffers and the post pass mixes the two; palettes blend inside the shaders.
@@ -149,7 +172,7 @@ Then switch on OSC BRIDGE in the panel. Addresses:
 
 | address | args | effect |
 |---------|------|--------|
-| `/sg/corrupt` `/sg/decay` `/sg/sens` `/sg/focus` `/sg/dynamics` `/sg/fade` `/sg/res` `/sg/mirror` `/sg/pixel` `/sg/hue` `/sg/poster` `/sg/srcBurn` `/sg/srcOpacity` `/sg/srcSize` `/sg/srcX` `/sg/srcY` | f 0..1 | slider, as a fraction of its range |
+| `/sg/corrupt` `/sg/decay` `/sg/sens` `/sg/focus` `/sg/dynamics` `/sg/music` `/sg/keyColor` `/sg/lock` `/sg/fade` `/sg/res` `/sg/mirror` `/sg/pixel` `/sg/hue` `/sg/poster` `/sg/srcBurn` `/sg/srcOpacity` `/sg/srcSize` `/sg/srcX` `/sg/srcY` | f 0..1 | slider, as a fraction of its range |
 | `/sg/vary` | | new variation seeds, same modes |
 | `/sg/cycle` | i | beats between auto-cycle steps |
 | `/sg/mode` | i | mode by index (0-based) |
@@ -197,6 +220,8 @@ source is local to the controller.
 | GLYPH | a terminal of invented glyphs, each row typed by a band, rows invert on beats |
 | FLARE | beat-spawned bursts with spokes on a starfield, outward feedback leaves expanding rings |
 | RIDGE | stacked ridge lines, one per band, with the waveform running through them |
+| WATERFALL | the last two seconds of spectrum as a waterfall, bar lines marching through it |
+| CHROMA | twelve pitch-class wedges turning once per bar, the key glowing at the centre |
 
 Palettes: SPECTRUM, ACID, PHOSPHOR, HEAT, BRUISE, STROBE, VAPOR, ICE, AMBER,
 TOXIC, BLOOD, CGA.
@@ -222,8 +247,13 @@ scripts/        launch.sh for the Desktop launcher
 Add a mode by pushing `{ name, blurb, src }` to `MODES` in `js/shaders.js`.
 The fragment body has `uPrev` (last frame), `spec(x)` (0..1 spectrum, x = 0
 is DC, 0.5 is roughly 11 kHz), `wav(x)` (-1..1 auto-gained waveform),
-`uLevel / uBass / uMid / uTreble / uBeat / uBeatCount`, `uCorrupt / uDecay /
-uSens`, `palette(t)` and `hash21 / noise / sdSeg` helpers. A mode may also
+`hist(x, age)` (the spectrum up to two seconds ago), `chroma(pc)`,
+`uLevel / uBass / uMid / uTreble / uBeat / uBeatCount`, `uKick / uSnare /
+uHat` and their counts, `uBar / uBarPhase / uBeatTime / uPhrase /
+uPhrasePhase / uDownbeat`, `uDrop / uBuild`, `uPitch / uKeyHue /
+uChromaClarity`, `uCentroid / uFlat / uHarm / uPerc`, `uWidth / uPan`,
+`uSilence / uPunch / uSharp`, `uMusic`, `uSeed`, `uCorrupt / uDecay / uSens`,
+`palette(t)` and `hash21 / noise / sdSeg` helpers (see `AUDIO_UNIFORMS`). A mode may also
 carry `sim`, a shader stepped eight times per frame on a half-float state
 buffer readable as `uSim` (see REACT).
 
