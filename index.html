@@ -143,6 +143,7 @@
     <button id="cycleScenes" data-target="cycleScenes">CYCLE SCENES</button>
     <button id="randomCycle" data-target="randomCycle">RANDOM CYCLE</button>
     <button id="random" data-target="random">RANDOM</button>
+    <button id="vary" data-target="vary" title="new variation of the current modes">VARY</button>
     <button id="stage">STAGE OUTPUT</button>
   </div>
 
@@ -170,6 +171,16 @@
   <div class="slider"><span>CYCLE</span><input id="cycle" type="range" min="1" max="64" step="1"><span id="cycleVal"></span></div>
   <div class="slider"><span>FADE</span><input id="fade" type="range" min="0" max="10" step="0.1"><span id="fadeVal"></span></div>
   <div class="slider"><span>RES</span><input id="res" type="range" min="0.2" max="1" step="0.05"><span id="resVal"></span></div>
+
+  <details id="fxSection" open>
+    <summary>FX</summary>
+    <div class="body">
+      <div class="slider"><span>MIRROR</span><input id="mirror" type="range" min="0" max="8" step="1"><span id="mirrorVal"></span></div>
+      <div class="slider"><span>PIXEL</span><input id="pixel" type="range" min="0" max="1" step="0.01"><span id="pixelVal"></span></div>
+      <div class="slider"><span>HUE</span><input id="hue" type="range" min="0" max="1" step="0.01"><span id="hueVal"></span></div>
+      <div class="slider"><span>POSTER</span><input id="poster" type="range" min="0" max="1" step="0.01"><span id="posterVal"></span></div>
+    </div>
+  </details>
 
   <details id="srcSection">
     <summary>SOURCE (LOGO / CAMERA)</summary>
@@ -232,7 +243,7 @@
   </div>
 </div>
 
-<div id="hint"><b>1-0</b> mode &nbsp; <b>space / arrows</b> next &nbsp; <b>shift+1-9</b> scene &nbsp; <b>p</b> palette &nbsp; <b>a</b> auto &nbsp; <b>[ ]</b> cycle speed &nbsp; <b>m</b> mic &nbsp; <b>t</b> test &nbsp; <b>r</b> random &nbsp; <b>c</b> clear &nbsp; <b>f</b> fullscreen &nbsp; <b>h</b> hide ui</div>
+<div id="hint"><b>1-0</b> mode &nbsp; <b>space / arrows</b> next &nbsp; <b>shift+1-9</b> scene &nbsp; <b>p</b> palette &nbsp; <b>a</b> auto &nbsp; <b>[ ]</b> cycle speed &nbsp; <b>m</b> mic &nbsp; <b>t</b> test &nbsp; <b>r</b> random &nbsp; <b>v</b> vary &nbsp; <b>c</b> clear &nbsp; <b>f</b> fullscreen &nbsp; <b>h</b> hide ui</div>
 <div id="tag"><b>OUTPUT</b> <span id="tagTxt">waiting for controller</span> &nbsp; f fullscreen</div>
 
 <script type="module" src="js/app.js"></script>

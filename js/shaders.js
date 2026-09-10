@@ -29,6 +29,7 @@ uniform float uSens;
 uniform int   uPalette;
 uniform int   uPaletteTo;
 uniform float uPalMix;
+uniform vec4  uSeed;      // per-look variation, 0..1 each; rerolled by VARY / RANDOM / auto-cycle
 out vec4 fragColor;
 
 float spec(float x) { return texture(uAudio, vec2(clamp(x, 0.0, 1.0), 0.25)).r; }
@@ -89,7 +90,8 @@ void main() {
   vec2 p = (uv - 0.5) * aspect();
 
   // macroblock displacement, more blocks tear on beats
-  vec2 cell = vec2(floor(uv.x * 22.0), floor(uv.y * 13.0));
+  vec2 grid = vec2(10.0 + 30.0 * uSeed.x, 6.0 + 18.0 * uSeed.y);
+  vec2 cell = floor(uv * grid);
   float h = hash21(cell + floor(uTime * 4.0) * (0.3 + uBeat));
   float s = spec(fract(h * 7.0) * 0.4);
   vec2 shift = vec2(0.0);
@@ -98,7 +100,7 @@ void main() {
   }
 
   // slow curl flow + bass push
-  float ang = noise(p * 2.5 + uTime * 0.15) * 6.28318;
+  float ang = noise(p * (1.5 + 4.0 * uSeed.w) + uTime * 0.15) * 6.28318;
   vec2 flow = vec2(cos(ang), sin(ang)) * (0.0015 + 0.02 * uBass);
   vec2 src = uv + shift + flow - (uv - 0.5) * (0.004 + 0.02 * uMid);
 
@@ -110,7 +112,7 @@ void main() {
   float r = length(p);
   float a = atan(p.y, p.x) / 6.28318 + 0.5;
   float w = wav(a + uTime * 0.02);
-  float ring = smoothstep(0.025, 0.0, abs(r - 0.22 - w * 0.16 * (0.4 + uLevel)));
+  float ring = smoothstep(0.025, 0.0, abs(r - (0.12 + 0.25 * uSeed.z) - w * 0.16 * (0.4 + uLevel)));
   vec3 ink = palette(a + uTime * 0.07 + uBeatCount * 0.05) * ring * (0.6 + uLevel);
 
   fragColor = vec4(prev * uDecay + ink, 1.0);
@@ -122,12 +124,13 @@ void main() {
     src: `
 void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
-  float speed = (1.0 + 5.0 * uLevel) / uRes.x;
-  vec2 src = uv + vec2(speed, 0.0);
+  float dir = uSeed.w > 0.5 ? 1.0 : -1.0;
+  float speed = (0.5 + 3.0 * uSeed.x + 5.0 * uLevel) / uRes.x;
+  vec2 src = uv + vec2(speed * dir, 0.0);
 
   // shear rows by bass, tear rows on beats
   src.y += sin(uv.x * 18.0 + uTime * 1.7) * 0.0015 * uBass * uCorrupt;
-  float row = floor(uv.y * 48.0);
+  float row = floor(uv.y * (24.0 + 72.0 * uSeed.z));
   float tear = step(1.0 - uCorrupt * 0.4 * uBeat, hash21(vec2(row, floor(uTime * 24.0))));
   src.x += tear * (hash21(vec2(row + 9.0, floor(uTime * 24.0))) - 0.5) * 0.12;
   // slow melt toward the bottom, only when corruption is up
@@ -138,8 +141,9 @@ void main() {
   vec3 prev = texture(uPrev, src).rgb * pow(uDecay, 0.02);
 
   // new column at the right edge; y = frequency (log-ish)
-  float edge = smoothstep(1.0 - 2.5 / uRes.x, 1.0, uv.x);
-  float f = pow(uv.y, 2.0);
+  float ex = dir > 0.0 ? uv.x : 1.0 - uv.x;
+  float edge = smoothstep(1.0 - 2.5 / uRes.x, 1.0, ex);
+  float f = pow(uv.y, 1.2 + 2.0 * uSeed.y);
   float s = spec(f * 0.6);
   s = smoothstep(0.08, 0.95, s) * (0.7 + uSens * 0.6);
   vec3 ink = min(vec3(1.0), palette(s * 0.5 + uv.y * 0.3 + uTime * 0.04) * s * 1.8);
@@ -156,7 +160,7 @@ void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
   vec2 p = (uv - 0.5) * aspect();
 
-  float seg = 3.0 + mod(uBeatCount, 5.0);
+  float seg = 2.0 + floor(uSeed.x * 6.0) + mod(uBeatCount, 3.0);
   float ang = atan(p.y, p.x);
   float r = length(p);
   float k = 6.28318 / seg;
@@ -164,9 +168,11 @@ void main() {
   vec2 q = vec2(cos(ang), sin(ang)) * r;
 
   // feedback: rotate + zoom, driven by treble and bass
-  float rot = 0.015 + 0.08 * uTreble;
+  float rot = (0.015 + 0.08 * uTreble) * sign(uSeed.w - 0.5);
   mat2 R = mat2(cos(rot), -sin(rot), sin(rot), cos(rot));
   vec2 fp = R * p * (0.985 - 0.03 * uBass);
+  float fa = 6.28318 * (2.0 + floor(uSeed.y * 5.0));
+  float fb = 6.28318 * (1.0 + floor(uSeed.z * 4.0));
   vec2 fuv = fp / aspect() + 0.5;
   vec3 prev = texture(uPrev, fuv).rgb * uDecay;
 
@@ -176,7 +182,7 @@ void main() {
   vec2 last = vec2(wav(0.0), wav(0.25)) * amp + 0.16 * vec2(cos(uTime * 0.7), sin(uTime * 0.9));
   for (int i = 1; i <= 64; i++) {
     float t = float(i) / 64.0;
-    vec2 base = 0.16 * vec2(cos(t * 18.85 + uTime * 0.7), sin(t * 12.57 + uTime * 0.9));
+    vec2 base = 0.16 * vec2(cos(t * fa + uTime * 0.7), sin(t * fb + uTime * 0.9));
     vec2 c = vec2(wav(t), wav(t + 0.25)) * amp + base;
     d = min(d, sdSeg(q, last, c));
     last = c;
@@ -193,7 +199,7 @@ void main() {
     src: `
 void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
-  float g = 40.0 + floor(uTreble * 24.0);
+  float g = 24.0 + floor(uSeed.x * 72.0) + floor(uTreble * 24.0);
   vec2 c = floor(uv * vec2(g * uRes.x / uRes.y, g));
   int ix = int(c.x);
   int iy = int(c.y);
@@ -205,12 +211,13 @@ void main() {
   int sh = int(uBass * 5.0);
   int v = ((ix * mul) ^ (iy >> sh)) + t;
   float bit = float(v & 1) * float(((ix + t) ^ (iy * 3)) & 3) / 3.0;
-  float pat = float(((ix ^ iy) + t) & 15) / 15.0;
+  float pat = float(((ix ^ iy) + t) & 15) / 15.0 + uSeed.y;
 
   // previous frame scrolls up, rows byte-shift on beats
   float row = floor(uv.y * 40.0);
   float shift = step(1.0 - uCorrupt * 0.5 * uBeat, hash21(vec2(row, floor(uTime * 12.0)))) * (1.0 / 16.0);
-  vec3 prev = texture(uPrev, uv + vec2(shift, (1.0 + uMid * 5.0) / uRes.y)).rgb;
+  float dir = uSeed.w > 0.5 ? 1.0 : -1.0;
+  vec3 prev = texture(uPrev, uv + vec2(shift, dir * (1.0 + uMid * 5.0) / uRes.y)).rgb;
 
   float gate = smoothstep(0.25, 0.8, s);
   vec3 ink = palette(pat + uTime * 0.05) * bit * gate * 1.6;
@@ -229,10 +236,10 @@ void main() {
   float r = length(p);
   float a = atan(p.y, p.x);
 
-  float depth = 0.25 / (r + 0.03) + uTime * (0.4 + 2.0 * uLevel * uSens);
-  float band = fract(depth * 0.5);
+  float depth = 0.25 / (r + 0.03) + uTime * (0.4 + 2.0 * uLevel * uSens) * sign(uSeed.w - 0.5);
+  float band = fract(depth * (0.3 + 0.6 * uSeed.x));
   float s = spec(band * 0.5);
-  float spokes = spec(fract(a / 6.28318 + 0.5 + uTime * 0.02) * 0.3 + 0.05);
+  float spokes = spec(fract((a / 6.28318 + 0.5) * (1.0 + floor(uSeed.y * 4.0)) + uTime * 0.02) * 0.3 + 0.05);
   float wall = smoothstep(0.25, 1.0, s) * (0.4 + spokes);
   vec3 col = palette(band + a / 6.28318 + uTime * 0.08) * wall * (0.5 + uBass);
   col *= smoothstep(0.0, 0.18, r);
@@ -265,7 +272,7 @@ void main() {
 
   // base picture, drawn fresh every frame: stacked oscilloscope rows, each
   // showing a different slice of the waveform, brightness from the spectrum
-  float rows = 10.0;
+  float rows = 4.0 + floor(uSeed.x * 16.0);
   float row = floor(uv.y * rows);
   float fy = fract(uv.y * rows);
   float w = wav(uv.x * 0.5 + row * 0.1 + uTime * 0.03);
@@ -293,7 +300,8 @@ void main() {
 
   // pixel-sort style drip: take the pixel above if it is brighter than us
   vec3 here = texture(uPrev, uv).rgb;
-  vec3 up = texture(uPrev, uv + vec2(0.0, px.y * (1.0 + 3.0 * uLevel))).rgb;
+  float dir = uSeed.w > 0.5 ? 1.0 : -1.0;
+  vec3 up = texture(uPrev, uv + vec2(0.0, dir * px.y * (1.0 + 3.0 * uLevel))).rgb;
   float lh = dot(here, vec3(0.333));
   float lu = dot(up, vec3(0.333));
   float thr = 0.4 - 0.3 * uBass;
@@ -305,8 +313,8 @@ void main() {
   prev = mix(prev, texture(uPrev, uv + vec2(jit, 0.0)).rgb, step(0.01, abs(jit)));
 
   // spectrum poured in along the top edge
-  float s = spec(pow(uv.x, 1.5) * 0.6);
-  float top = smoothstep(0.985, 1.0, uv.y);
+  float s = spec(pow(uv.x, 0.8 + 1.5 * uSeed.x) * 0.6);
+  float top = smoothstep(0.985, 1.0, dir > 0.0 ? uv.y : 1.0 - uv.y);
   vec3 ink = palette(uv.x + uTime * 0.05) * s * 1.4 * top;
 
   // sparse drops anywhere on beats
@@ -323,11 +331,11 @@ void main() {
     src: `
 void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
-  vec2 p = (uv - 0.5) * aspect();
+  vec2 p = (uv - 0.5 + (uSeed.yz - 0.5) * 0.5) * aspect();
   float r = length(p);
   float a = atan(p.y, p.x) / 6.28318 + 0.5;
 
-  float ph = r * 18.0 - uTime * (2.0 + 4.0 * uLevel);
+  float ph = r * (8.0 + 24.0 * uSeed.x) - uTime * (2.0 + 4.0 * uLevel) * sign(uSeed.w - 0.5);
   float ring = 0.5 + 0.5 * sin(ph);
   float burst = smoothstep(0.03, 0.0, abs(r - (1.0 - uBeat) * 0.8)) * uBeat;
   float w = wav(a * 2.0 + uTime * 0.05) * 0.1 * uLevel;
@@ -348,8 +356,9 @@ void main() {
     blurb: 'fourteen strings, each tuned to a band, plucked by the waveform',
     src: `
 void main() {
-  vec2 uv = gl_FragCoord.xy / uRes;
-  float n = 14.0;
+  vec2 ouv = gl_FragCoord.xy / uRes;
+  vec2 uv = uSeed.w > 0.5 ? ouv.yx : ouv;   // strings run across or up
+  float n = 5.0 + floor(uSeed.x * 20.0);
   float idx = floor(uv.y * n);
   float fy = fract(uv.y * n) - 0.5;
 
@@ -362,7 +371,7 @@ void main() {
   vec3 col = palette(idx / n + uTime * 0.03 + uBeatCount * 0.01) * (line + glow) * (0.5 + band);
 
   // feedback drifts upward with bass, smears sideways with treble
-  vec2 src = uv + vec2(0.006 * uTreble * sin(uTime * 3.0 + idx), 0.002 * uBass);
+  vec2 src = ouv + vec2(0.006 * uTreble * sin(uTime * 3.0 + idx), 0.002 * uBass);
   vec3 prev = texture(uPrev, src).rgb * uDecay;
   fragColor = vec4(max(prev, col), 1.0);
 }`,
@@ -378,14 +387,15 @@ void main() {
   float ang = atan(p.y, p.x);
   float a01 = ang / 6.28318 + 0.5;
 
-  float sweep = mod(uTime * (1.6 + 2.0 * uLevel), 6.28318) - 3.14159;
+  float sweep = mod(uTime * (1.6 + 2.0 * uLevel) * sign(uSeed.w - 0.5), 6.28318) - 3.14159;
   float da = mod(ang - sweep + 6.28318, 6.28318);
   float beam = smoothstep(0.3, 0.0, da);
 
   float s = spec(pow(a01, 2.0) * 0.5);
   float blip = smoothstep(0.03, 0.0, abs(r - 0.08 - s * 0.4)) * beam * 2.5;
   float fillArea = step(r, 0.08 + s * 0.4) * beam * 0.25;
-  float grid = (step(0.97, fract(r * 8.0)) + step(0.985, fract(a01 * 8.0))) * 0.2 * step(r, 0.5);
+  float gd = 4.0 + floor(uSeed.x * 12.0);
+  float grid = (step(0.97, fract(r * gd)) + step(0.985, fract(a01 * gd))) * 0.2 * step(r, 0.5);
   float w = wav(a01 + uTime * 0.03) * 0.05 * uLevel;
   float rim = smoothstep(0.01, 0.0, abs(r - 0.48 - w)) * 0.8;
 
@@ -432,8 +442,8 @@ vec3 voro(vec2 p) {
 void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
   vec2 p = (uv - 0.5) * aspect();
-  float scale = 5.0 + 3.0 * uMid;
-  vec3 v = voro(p * scale + vec2(uTime * 0.1, 0.0));
+  float scale = 3.0 + 8.0 * uSeed.x + 3.0 * uMid;
+  vec3 v = voro(p * scale + vec2(uTime * 0.1) * (uSeed.yz - 0.5) * 4.0);
   float id = hash21(v.yz);
   float s = spec(fract(id * 5.0) * 0.5);
 
@@ -457,7 +467,7 @@ void main() {
   vec2 p = (uv - 0.5) * aspect();
 
   // curl of value noise advects the previous frame
-  float sc = 2.0 + 3.0 * uMid;
+  float sc = 1.0 + 4.0 * uSeed.x + 3.0 * uMid;
   float e = 0.01;
   vec2 q = p * sc + uTime * 0.1;
   float n0 = noise(q);
@@ -469,7 +479,7 @@ void main() {
 
   // two pens on lissajous paths, nudged by the waveform, fattened by level
   vec2 wob = 0.15 * vec2(wav(0.1), wav(0.6)) * uLevel;
-  vec2 pen = 0.32 * vec2(sin(uTime * 1.7), sin(uTime * 2.3)) + wob;
+  vec2 pen = 0.32 * vec2(sin(uTime * (0.8 + 2.0 * uSeed.y)), sin(uTime * (0.8 + 2.5 * uSeed.z))) + wob;
   vec2 pen2 = 0.32 * vec2(cos(uTime * 1.1), sin(uTime * 0.7 + 1.0)) - wob;
   float blob = smoothstep(0.06 + 0.1 * uLevel, 0.0, length(p - pen));
   float blob2 = smoothstep(0.05 + 0.08 * uBass, 0.0, length(p - pen2));
@@ -495,8 +505,9 @@ void main() {
            + 0.05 * (texture(uSim, uv + px).rg + texture(uSim, uv - px).rg
                    + texture(uSim, uv + vec2(px.x, -px.y)).rg + texture(uSim, uv + vec2(-px.x, px.y)).rg)
            - c;
-  float f = 0.026 + 0.025 * min(uBass, 1.0);
-  float k = 0.054 + 0.008 * min(uMid, 1.0);
+  // the seed picks the Gray-Scott regime (spots, worms, mazes, coral); audio nudges it
+  float f = 0.020 + 0.030 * uSeed.x + 0.02 * min(uBass, 1.0);
+  float k = 0.052 + 0.012 * uSeed.y + 0.006 * min(uMid, 1.0);
   float abb = c.x * c.y * c.y;
   vec2 n = c + vec2(lap.x - abb + f * (1.0 - c.x), 0.5 * lap.y + abb - (k + f) * c.y);
 
@@ -542,6 +553,7 @@ uniform float uBeatCount;
 uniform float uCorrupt;
 uniform float uDecay;
 uniform float uSens;
+uniform vec4  uSeed;
 out vec4 fragColor;
 float spec(float x) { return texture(uAudio, vec2(clamp(x, 0.0, 1.0), 0.25)).r; }
 float wav(float x)  { return texture(uAudio, vec2(fract(x), 0.75)).r * 2.0 - 1.0; }
@@ -595,6 +607,10 @@ uniform float uHasB;
 uniform int   uBlend;
 uniform vec4  uSrcRect;
 uniform float uSrcOpacity;
+uniform float uMirror;   // kaleidoscope segments, < 2 = off
+uniform float uPixel;    // 0..1 pixelation
+uniform float uHue;      // 0..1 hue rotation
+uniform float uPoster;   // 0..1 posterisation
 uniform vec2  uRes;
 uniform float uTime;
 uniform float uBeat;
@@ -611,10 +627,32 @@ float hash21(vec2 p) {
 vec3 fetch(sampler2D t, vec2 suv, float ab) {
   return vec3(texture(t, suv + vec2(ab, 0.0)).r, texture(t, suv).g, texture(t, suv - vec2(ab, 0.0)).b);
 }
+// rotate a colour about the grey axis
+vec3 hueRotate(vec3 c, float a) {
+  const vec3 k = vec3(0.57735);
+  float cs = cos(a), sn = sin(a);
+  return c * cs + cross(k, c) * sn + k * dot(k, c) * (1.0 - cs);
+}
 
 void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
   float ft = floor(uTime * 24.0);
+
+  // kaleidoscope fold
+  if (uMirror >= 2.0) {
+    vec2 asp = vec2(uRes.x / uRes.y, 1.0);
+    vec2 p = (uv - 0.5) * asp;
+    float k = 6.28318 / uMirror;
+    float a = abs(mod(atan(p.y, p.x) + 3.14159, k) - k * 0.5);
+    p = vec2(cos(a), sin(a)) * length(p);
+    uv = clamp(p / asp + 0.5, 0.0, 1.0);
+  }
+  // pixelation
+  if (uPixel > 0.0) {
+    float cells = mix(400.0, 20.0, uPixel);
+    vec2 g = vec2(cells * uRes.x / uRes.y, cells);
+    uv = (floor(uv * g) + 0.5) / g;
+  }
 
   // block shifts
   float blockY = floor(uv.y * 20.0);
@@ -632,7 +670,7 @@ void main() {
   if (uHasB > 0.5) {
     vec3 b = fetch(uTexB, suv, ab);
     if (uMixB < 1.0) b = mix(fetch(uTexB2, suv, ab), b, uMixB);
-    if (uBlend == 1) col = col + b;
+    if (uBlend == 1) col = col + b * 0.65;   // softened so two bright layers don't white out
     else if (uBlend == 2) col = col * b * 2.0;
     else if (uBlend == 3) col = 1.0 - (1.0 - col) * (1.0 - b);
     else if (uBlend == 4) col = abs(col - b);
@@ -649,6 +687,13 @@ void main() {
   // rare full inversion on hard beats
   float inv = step(0.96, hash21(vec2(floor(uTime * 8.0), 7.0))) * step(0.7, uBeat) * step(0.3, uCorrupt);
   col = mix(col, 1.0 - col, inv);
+
+  // colour treatments
+  if (uHue > 0.0) col = clamp(hueRotate(col, uHue * 6.28318), 0.0, 1.0);
+  if (uPoster > 0.0) {
+    float lv = mix(24.0, 3.0, uPoster);
+    col = floor(col * lv + 0.5) / lv;
+  }
 
   // clean source overlay (logo / camera) on top
   if (uSrcOpacity > 0.0) {

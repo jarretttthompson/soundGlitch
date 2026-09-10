@@ -28,14 +28,28 @@ const DEFAULTS = {
   mode: 0, palette: 0, corrupt: 0.5, decay: 0.65, sens: 1.0, focus: 0.5,
   auto: false, cycleScenes: false, randomCycle: false, cycle: 16, fade: 2, res: 0.7,
   layerB: -1, blend: 1, paletteB: -1,
+  seed: [0.5, 0.5, 0.5, 0.5], seedB: [0.5, 0.5, 0.5, 0.5],
+  mirror: 0, pixel: 0, hue: 0, poster: 0,
   srcBurn: 0, srcOpacity: 0, srcSize: 0.5, srcX: 0.5, srcY: 0.5,
   osc: false, midi: false,
 };
 // what a scene captures (not input, cycling or transport settings)
 const SCENE_KEYS = ['mode', 'palette', 'corrupt', 'decay', 'sens', 'focus', 'cycle', 'fade',
-                    'layerB', 'blend', 'paletteB', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY'];
+                    'layerB', 'blend', 'paletteB', 'seed', 'seedB', 'mirror', 'pixel', 'hue', 'poster',
+                    'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY'];
 // continuous values that glide to a new target over the fade time instead of jumping
-const TWEEN_KEYS = ['corrupt', 'decay', 'sens', 'focus', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY'];
+const TWEEN_KEYS = ['corrupt', 'decay', 'sens', 'focus', 'pixel', 'hue', 'poster', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY'];
+const rand4 = () => [Math.random(), Math.random(), Math.random(), Math.random()];
+// recently used modes / palettes are avoided by RANDOM so runs don't repeat
+const recentModes = [], recentPals = [];
+function pickFresh(n, recent, keep) {
+  const pool = [];
+  for (let i = 0; i < n; i++) if (!recent.includes(i)) pool.push(i);
+  const i = pool.length ? pool[Math.floor(Math.random() * pool.length)] : Math.floor(Math.random() * n);
+  recent.push(i);
+  while (recent.length > keep) recent.shift();
+  return i;
+}
 let tween = null; // { from, to, t, dur }
 const smoothstep = t => t * t * (3 - 2 * t);
 
@@ -58,8 +72,14 @@ function apply(fade = params.fade) {
   params.mode = wrap(params.mode, MODES.length);
   params.palette = wrap(params.palette, PALETTES.length);
   if (params.layerB >= MODES.length) params.layerB = -1;
-  engine.setMode(params.mode, fade, 0);
-  engine.setMode(params.layerB, fade, 1);
+  if (!Array.isArray(params.seed) || params.seed.length !== 4) params.seed = DEFAULTS.seed.slice();
+  if (!Array.isArray(params.seedB) || params.seedB.length !== 4) params.seedB = DEFAULTS.seedB.slice();
+  engine.setMode(params.mode, fade, 0, params.seed);
+  engine.setMode(params.layerB, fade, 1, params.seedB);
+  engine.fx.mirror = params.mirror;
+  engine.fx.pixel = params.pixel;
+  engine.fx.hue = params.hue;
+  engine.fx.poster = params.poster;
   engine.setPalette(params.palette, fade, 0);
   if (params.paletteB >= PALETTES.length) params.paletteB = -1;
   engine.setPalette(params.paletteB < 0 ? params.palette : params.paletteB, fade, 1);
@@ -137,27 +157,40 @@ function setSlider(k, v) {
 function randomize() {
   const r = (a, b) => a + Math.random() * (b - a);
   const pick = n => Math.floor(Math.random() * n);
-  let mode = pick(MODES.length);
-  if (mode === params.mode) mode = (mode + 1 + pick(MODES.length - 1)) % MODES.length;
-  let pal = pick(PALETTES.length);
-  if (pal === params.palette) pal = (pal + 1 + pick(PALETTES.length - 1)) % PALETTES.length;
+  const chance = p => Math.random() < p;
+  if (!recentModes.includes(params.mode)) recentModes.push(params.mode);
+  if (!recentPals.includes(params.palette)) recentPals.push(params.palette);
+  const mode = pickFresh(MODES.length, recentModes, 6);
+  const pal = pickFresh(PALETTES.length, recentPals, 5);
   const target = {
     mode, palette: pal,
+    seed: rand4(), seedB: rand4(),
     corrupt: +r(0, 1).toFixed(2),
     decay: +r(0.2, 1).toFixed(2),
     sens: +r(0.7, 2.2).toFixed(2),
     cycle: [2, 4, 8, 8, 16, 16, 32][pick(7)],
     layerB: -1,
+    // post treatments: mostly off, so the plain modes still show up
+    mirror: chance(0.4) ? [2, 3, 4, 5, 6, 8][pick(6)] : 0,
+    pixel: chance(0.25) ? +r(0.15, 0.7).toFixed(2) : 0,
+    hue: chance(0.5) ? +r(0, 1).toFixed(2) : 0,
+    poster: chance(0.25) ? +r(0.3, 0.9).toFixed(2) : 0,
   };
-  if (Math.random() < 0.35) {
+  if (chance(0.5)) {
     let b = pick(MODES.length);
     if (b === mode) b = (b + 1) % MODES.length;
     target.layerB = b;
     target.blend = pick(BLENDS.length);
-    target.paletteB = Math.random() < 0.5 ? -1 : pick(PALETTES.length);
+    target.paletteB = chance(0.5) ? -1 : pick(PALETTES.length);
   }
   sceneIdx = -1;
   transitionTo(target);
+}
+
+// New variation of the current modes only: reroll the seeds, keep everything else.
+function vary() {
+  sceneIdx = -1;
+  transitionTo({ seed: rand4(), seedB: rand4() });
 }
 
 // ---- scenes --------------------------------------------------------------
@@ -231,7 +264,7 @@ palBSel.addEventListener('change', () => setPaletteB(+palBSel.value));
 palBSel.addEventListener('mousedown', e => { if (midi.learning) { e.preventDefault(); midi.arm('palBSel'); } });
 
 const sliders = {};
-for (const k of ['corrupt', 'decay', 'sens', 'focus', 'cycle', 'fade', 'res', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY']) {
+for (const k of ['corrupt', 'decay', 'sens', 'focus', 'cycle', 'fade', 'res', 'mirror', 'pixel', 'hue', 'poster', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY']) {
   const el = $(`#${k}`);
   sliders[k] = el;
   el.dataset.target = k;
@@ -253,6 +286,8 @@ function fmt(k) {
   if (k === 'cycle') return v + (v === 1 ? ' BEAT' : ' BEATS');
   if (k === 'fade') return v === 0 ? 'CUT' : v.toFixed(1) + ' S';
   if (k === 'res') return `${Math.round(v * 100)}% ${engine.canvas.width}x${engine.canvas.height}`;
+  if (k === 'mirror') return v < 2 ? 'OFF' : `${v} WAY`;
+  if (k === 'hue') return v === 0 ? 'OFF' : Math.round(v * 360) + ' DEG';
   if (k === 'srcSize') return Math.round(v * 100) + '%';
   return Math.round(v * 100) + '%';
 }
@@ -396,6 +431,7 @@ $('#auto').addEventListener('click', () => guard('auto', () => setAuto(!params.a
 $('#cycleScenes').addEventListener('click', () => guard('cycleScenes', () => setCycleScenes(!params.cycleScenes)));
 $('#randomCycle').addEventListener('click', () => guard('randomCycle', () => setRandomCycle(!params.randomCycle)));
 $('#random').addEventListener('click', () => guard('random', randomize));
+$('#vary').addEventListener('click', () => guard('vary', vary));
 $('#clear').addEventListener('click', () => guard('clear', () => { engine.clear(); link.sendCmd('clear'); }));
 $('#full').addEventListener('click', toggleFull);
 $('#hide').addEventListener('click', () => document.body.classList.toggle('hidden'));
@@ -525,6 +561,7 @@ function act(target, value = 1, isCC = false, edge = true) {
     case 'next': if (edge) setMode(params.mode + 1); break;
     case 'prev': if (edge) setMode(params.mode - 1); break;
     case 'random': if (edge) randomize(); break;
+    case 'vary': if (edge) vary(); break;
     case 'clear': if (edge) { engine.clear(); link.sendCmd('clear'); } break;
     case 'auto': if (edge) setAuto(!params.auto); break;
     case 'cycleScenes': if (edge) setCycleScenes(!params.cycleScenes); break;
@@ -568,6 +605,7 @@ function onOsc(address, args) {
       break;
     }
     case 'random': randomize(); break;
+    case 'vary': vary(); break;
     case 'clear': engine.clear(); link.sendCmd('clear'); break;
     case 'auto': setAuto(typeof v === 'number' ? v > 0 : !params.auto); break;
     case 'cycleScenes': setCycleScenes(typeof v === 'number' ? v > 0 : !params.cycleScenes); break;
@@ -624,6 +662,7 @@ window.addEventListener('keydown', e => {
   else if (k === 'h' || k === 'H') document.body.classList.toggle('hidden');
   else if (k === 'c' || k === 'C') { engine.clear(); link.sendCmd('clear'); }
   else if (k === 'r' || k === 'R') randomize();
+  else if (k === 'v' || k === 'V') vary();
   else if (k === 'm' || k === 'M') $('#mic').click();
   else if (k === 't' || k === 'T') $('#test').click();
 });
@@ -652,7 +691,7 @@ function cycleFallback() { return Math.max(3, params.cycle * 0.75); }
 function stepCycle() {
   if (params.randomCycle) randomize();
   else if (params.cycleScenes && scenes.list.length) loadScene(wrap(sceneIdx + 1, scenes.list.length));
-  else setMode(params.mode + 1);
+  else transitionTo({ mode: wrap(params.mode + 1, MODES.length), seed: rand4() }); // next mode, fresh variation
 }
 
 function frame(now) {
@@ -712,6 +751,8 @@ engine.layers[0].mode = params.mode;
 engine.layers[1].mode = params.layerB;
 engine.layers[0].palette = params.palette;
 engine.layers[1].palette = params.paletteB < 0 ? params.palette : params.paletteB;
+if (Array.isArray(params.seed) && params.seed.length === 4) engine.layers[0].seed = params.seed.slice();
+if (Array.isArray(params.seedB) && params.seedB.length === 4) engine.layers[1].seed = params.seedB.slice();
 apply(0);
 refreshUI();
 setStatus();
@@ -728,4 +769,4 @@ if (ROLE === 'controller') {
 requestAnimationFrame(frame);
 
 // debug hooks
-window.sg = { audio, engine, params, scenes, midi, link, frame: () => frame(performance.now()), setMode, setPalette, setLayerB, setPaletteB, randomize, loadScene, act, onOsc, apply, ROLE, tween: () => tween };
+window.sg = { audio, engine, params, scenes, midi, link, frame: () => frame(performance.now()), setMode, setPalette, setLayerB, setPaletteB, randomize, vary, transitionTo, loadScene, act, onOsc, apply, ROLE, tween: () => tween };

@@ -29,9 +29,12 @@ class Layer {
     this.palFrom = 0;
     this.palT = 1;
     this.palDur = 0;
+    this.seed = [0.5, 0.5, 0.5, 0.5];
+    this.fromSeed = this.seed;
   }
   get fading() { return this.fadeT < 1; }
 }
+const sameSeed = (a, b) => a.length === b.length && a.every((v, i) => Math.abs(v - b[i]) < 1e-6);
 
 export class Engine {
   constructor(canvas) {
@@ -45,6 +48,7 @@ export class Engine {
     this.layers = [new Layer(), new Layer()];
     this.layers[1].mode = -1;
     this.blend = 1;
+    this.fx = { mirror: 0, pixel: 0, hue: 0, poster: 0 };
 
     this.programs = MODES.map(m => this._link(COMMON + m.src, m.name));
     this.sims = MODES.map(m => (m.sim ? this._link(SIM_PRELUDE + m.sim, m.name + ' sim') : null));
@@ -259,18 +263,22 @@ export class Engine {
     L.readB = 1 - L.readB;
   }
 
-  setMode(i, dur = 0, layer = 0) {
+  // Change a layer's mode and/or variation seed; either change crossfades.
+  setMode(i, dur = 0, layer = 0, seed = null) {
     const L = this.layers[layer];
-    if (i === L.mode) return;
+    const seedChanged = !!seed && !sameSeed(seed, L.seed);
+    if (i === L.mode && !seedChanged) return;
     if (dur > 0 && L.fbos && L.mode >= 0 && i >= 0) {
       this._snapshotToB(L);
       L.fromMode = L.mode;
+      L.fromSeed = L.seed;
       L.fadeT = 0;
       L.fadeDur = dur;
     } else {
       L.fadeT = 1;
     }
     L.mode = i;
+    if (seed) L.seed = seed.slice();
   }
 
   get mode() { return this.layers[0].mode; }
@@ -295,10 +303,12 @@ export class Engine {
 
   // ---- rendering ---------------------------------------------------------
 
-  _setAudioUniforms(prog, audio, params, time, dt) {
+  _setAudioUniforms(prog, audio, params, time, dt, seed) {
     const gl = this.gl;
     gl.uniform2f(this._u(prog, 'uRes'), this.canvas.width, this.canvas.height);
-    gl.uniform1f(this._u(prog, 'uTime'), time);
+    // the seed also offsets time so every look starts at a different phase
+    gl.uniform1f(this._u(prog, 'uTime'), time + seed[0] * 977);
+    gl.uniform4f(this._u(prog, 'uSeed'), seed[0], seed[1], seed[2], seed[3]);
     gl.uniform1f(this._u(prog, 'uDt'), dt);
     gl.uniform1f(this._u(prog, 'uLevel'), audio.level);
     gl.uniform1f(this._u(prog, 'uBass'), audio.bass);
@@ -325,7 +335,7 @@ export class Engine {
     gl.uniform1i(this._u(prog, 'uAudio'), 1);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.audioTex);
-    this._setAudioUniforms(prog, audio, params, time, dt);
+    this._setAudioUniforms(prog, audio, params, time, dt, L.seed);
     gl.uniform2f(this._u(prog, 'uRes'), w, h);
     for (let s = 0; s < SIM_STEPS; s++) {
       const src = L.sim[L.simRead], dst = L.sim[1 - L.simRead];
@@ -338,7 +348,7 @@ export class Engine {
     }
   }
 
-  _drawMode(L, modeIndex, srcTex, dst, audio, params, time, dt) {
+  _drawMode(L, modeIndex, seed, srcTex, dst, audio, params, time, dt) {
     const gl = this.gl;
     const w = this.canvas.width, h = this.canvas.height;
     const prog = this.programs[modeIndex];
@@ -355,7 +365,7 @@ export class Engine {
     gl.uniform1i(this._u(prog, 'uPrev'), 0);
     gl.uniform1i(this._u(prog, 'uAudio'), 1);
     gl.uniform1i(this._u(prog, 'uSim'), 2);
-    this._setAudioUniforms(prog, audio, params, time, dt);
+    this._setAudioUniforms(prog, audio, params, time, dt, seed);
     gl.uniform1i(this._u(prog, 'uPalette'), palMix > 0 ? L.palFrom : L.palette);
     gl.uniform1i(this._u(prog, 'uPaletteTo'), L.palette);
     gl.uniform1f(this._u(prog, 'uPalMix'), palMix);
@@ -392,13 +402,13 @@ export class Engine {
     let outTex = null;
     if (fading) {
       const src = L.fbosB[L.readB], dst = L.fbosB[1 - L.readB];
-      this._drawMode(L, L.fromMode, src.tex, dst, audio, params, time, dt);
+      this._drawMode(L, L.fromMode, L.fromSeed, src.tex, dst, audio, params, time, dt);
       if (inject) this._inject(dst, inject);
       L.readB = 1 - L.readB;
       outTex = dst.tex;
     }
     const src = L.fbos[L.read], dst = L.fbos[1 - L.read];
-    this._drawMode(L, L.mode, src.tex, dst, audio, params, time, dt);
+    this._drawMode(L, L.mode, L.seed, src.tex, dst, audio, params, time, dt);
     if (inject) this._inject(dst, inject);
     L.read = 1 - L.read;
     return { tex: dst.tex, outTex: outTex || dst.tex, mix: fading ? smooth(L.fadeT) : 1 };
@@ -442,6 +452,10 @@ export class Engine {
     gl.uniform1i(this._u(P, 'uBlend'), this.blend);
     gl.uniform4f(this._u(P, 'uSrcRect'), ...this._srcRect());
     gl.uniform1f(this._u(P, 'uSrcOpacity'), hasSrc ? this.src.opacity : 0);
+    gl.uniform1f(this._u(P, 'uMirror'), this.fx.mirror);
+    gl.uniform1f(this._u(P, 'uPixel'), this.fx.pixel);
+    gl.uniform1f(this._u(P, 'uHue'), this.fx.hue);
+    gl.uniform1f(this._u(P, 'uPoster'), this.fx.poster);
     gl.uniform2f(this._u(P, 'uRes'), w, h);
     gl.uniform1f(this._u(P, 'uTime'), time);
     gl.uniform1f(this._u(P, 'uBeat'), audio.beat);

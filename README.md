@@ -62,9 +62,22 @@ seconds after starting to settle.
   transition or by randomization.
 - RES is the render scale. 70% is the default; a big TV or a slow laptop
   may want it lower, a 4K output can go higher.
-- RANDOM rerolls the mode, palette, CORRUPT, DECAY, SENS, CYCLE and
-  sometimes adds a second layer (SENS stays within a sane 0.7x to 2.2x).
-  FADE and auto-cycle are left alone.
+- RANDOM rerolls the mode, palette, both variation seeds, CORRUPT, DECAY,
+  SENS, CYCLE, the FX section, and half the time adds a second layer with
+  its own blend and palette (SENS stays within a sane 0.7x to 2.2x). It
+  avoids the last six modes and five palettes so runs don't repeat. FADE
+  and auto-cycle are left alone.
+- VARY (`v`) rerolls only the variation seeds: same modes, new structure.
+- Variation seeds: every mode reads four random numbers that change its
+  structure, not just its motion. Grid sizes, ring radii, string counts,
+  kaleidoscope segments, scroll direction, sweep direction, lissajous
+  frequencies, voronoi scale, the reaction-diffusion regime, and the time
+  phase all come from the seed, so one mode has thousands of distinct
+  looks. Auto-cycle draws a fresh seed on every step. Seeds are saved with
+  scenes, so a scene recalls the exact look.
+- FX: MIRROR folds the output into a 2 to 8 way kaleidoscope, PIXEL
+  quantises it, HUE rotates every colour, POSTER crushes it to a few
+  levels. They stack with any mode, layer and palette.
 - Settings persist in localStorage.
 
 ## Layer B
@@ -113,7 +126,8 @@ Then switch on OSC BRIDGE in the panel. Addresses:
 
 | address | args | effect |
 |---------|------|--------|
-| `/sg/corrupt` `/sg/decay` `/sg/sens` `/sg/focus` `/sg/fade` `/sg/res` `/sg/srcBurn` `/sg/srcOpacity` `/sg/srcSize` `/sg/srcX` `/sg/srcY` | f 0..1 | slider, as a fraction of its range |
+| `/sg/corrupt` `/sg/decay` `/sg/sens` `/sg/focus` `/sg/fade` `/sg/res` `/sg/mirror` `/sg/pixel` `/sg/hue` `/sg/poster` `/sg/srcBurn` `/sg/srcOpacity` `/sg/srcSize` `/sg/srcX` `/sg/srcY` | f 0..1 | slider, as a fraction of its range |
+| `/sg/vary` | | new variation seeds, same modes |
 | `/sg/cycle` | i | beats between auto-cycle steps |
 | `/sg/mode` | i | mode by index (0-based) |
 | `/sg/fadeTo` | i f | mode by index with a one-off fade time in seconds |
