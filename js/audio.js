@@ -48,6 +48,14 @@ export class AudioIn {
     this.music = 1;
     this.gain = 1;
 
+    // dynamics: absolute loudness against the loudest thing heard recently,
+    // so soft passages calm the visuals instead of being auto-gained up
+    this.dynamics = 0.6;   // 0 = ignore loudness, 1 = fully proportional
+    this.energy = 1;       // 0..1 smoothed loudness
+    this.loudDb = -60;
+    this._loudRef = -60;   // slowly decaying peak in dB
+    this.loudRange = 30;   // dB below the reference that counts as silent
+
     this._peak = { level: 0.05, bass: 0.05, mid: 0.05, treble: 0.05, wave: 0.05, spec: 60 };
     this._floor = { level: 0, bass: 0, mid: 0, treble: 0 };
     this._specFloor = new Float32Array(512);
@@ -218,6 +226,7 @@ export class AudioIn {
     this.beat = m.beat; this.beatCount = m.beatCount; this.clip = m.clip;
     this.bpm = m.bpm; this.tempoConf = m.tempoConf; this.beatPhase = m.beatPhase;
     this.tempoBeat = m.tempoBeat; this.tempoBeatCount = m.tempoBeatCount; this.music = m.music;
+    if (typeof m.energy === 'number') this.energy = m.energy;
     if (m.tex) this.tex.set(m.tex);
   }
 
@@ -227,6 +236,7 @@ export class AudioIn {
       beat: this.beat, beatCount: this.beatCount, clip: this.clip,
       bpm: this.bpm, tempoConf: this.tempoConf, beatPhase: this.beatPhase,
       tempoBeat: this.tempoBeat, tempoBeatCount: this.tempoBeatCount, music: this.music,
+      energy: this.energy,
       tex: this.tex,
     };
   }
@@ -269,6 +279,7 @@ export class AudioIn {
       this.treble += (0.08 - this.treble) * k;
       this.beat *= Math.pow(0.88, q);
       this.tempoBeat *= Math.pow(0.85, q);
+      this.energy += (0.5 - this.energy) * k;
       for (let i = 0; i < 512; i++) {
         const f = i / 512;
         this.tex[i] = (255 * 0.55 * Math.exp(-f * 9) * (0.6 + 0.4 * pulse) * (0.7 + 0.3 * Math.sin(i * 0.4 + t))) | 0;
@@ -307,7 +318,21 @@ export class AudioIn {
     const musicRaw = Math.min(1, this.tempoConf * 2.0) * 0.6 + Math.min(1, subRatio * 1.5) * 0.4;
     const mk = musicRaw > this.music ? 1 - Math.pow(0.97, q) : 1 - Math.pow(0.992, q);
     this.music += (musicRaw - this.music) * mk;
-    this.gain = 1 - this.focus * (1 - this.music);
+
+    // loudness: rms in dB against a reference that follows the loudest recent
+    // passage and forgets it at about 0.4 dB/s (a 30 dB drop takes ~75 s)
+    // integrate over ~0.4 s first (like a loudness meter) so the gaps between
+    // kicks don't read as a quiet passage
+    const dbInst = 20 * Math.log10(this.rms + 1e-6);
+    this.loudDb += (dbInst - this.loudDb) * (1 - Math.pow(0.96, q));
+    this._loudRef = Math.max(this.loudDb, this._loudRef - 0.4 * dt, -50);
+    const energyRaw = Math.min(1, Math.max(0, (this.loudDb - (this._loudRef - this.loudRange)) / this.loudRange));
+    // ease in fast, ease out slow, so a drop hits at once and a breakdown settles gently
+    const ek = energyRaw > this.energy ? 1 - Math.pow(0.9, q) : 1 - Math.pow(0.985, q);
+    this.energy += (energyRaw - this.energy) * ek;
+
+    const dyn = 1 - this.dynamics * (1 - this.energy);
+    this.gain = (1 - this.focus * (1 - this.music)) * dyn;
 
     const sens = this.sens * this.gain;
     const nl = Math.min(1.5, this._norm('level', this.rms, q) * sens);

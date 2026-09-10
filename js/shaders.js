@@ -608,6 +608,8 @@ uniform int   uBlend;
 uniform vec4  uSrcRect;
 uniform float uSrcOpacity;
 uniform float uMirror;   // kaleidoscope segments, < 2 = off
+uniform float uMirrorFrom;
+uniform float uMirrorMix; // 1 = settled on uMirror, < 1 = still blending from uMirrorFrom
 uniform float uPixel;    // 0..1 pixelation
 uniform float uHue;      // 0..1 hue rotation
 uniform float uPoster;   // 0..1 posterisation
@@ -634,19 +636,21 @@ vec3 hueRotate(vec3 c, float a) {
   return c * cs + cross(k, c) * sn + k * dot(k, c) * (1.0 - cs);
 }
 
-void main() {
-  vec2 uv = gl_FragCoord.xy / uRes;
+// kaleidoscope fold
+vec2 fold(vec2 uv, float m) {
+  if (m < 2.0) return uv;
+  vec2 asp = vec2(uRes.x / uRes.y, 1.0);
+  vec2 p = (uv - 0.5) * asp;
+  float k = 6.28318 / m;
+  float a = abs(mod(atan(p.y, p.x) + 3.14159, k) - k * 0.5);
+  p = vec2(cos(a), sin(a)) * length(p);
+  return clamp(p / asp + 0.5, 0.0, 1.0);
+}
+
+// everything after the fold, up to the source overlay
+vec3 shade(vec2 uv) {
   float ft = floor(uTime * 24.0);
 
-  // kaleidoscope fold
-  if (uMirror >= 2.0) {
-    vec2 asp = vec2(uRes.x / uRes.y, 1.0);
-    vec2 p = (uv - 0.5) * asp;
-    float k = 6.28318 / uMirror;
-    float a = abs(mod(atan(p.y, p.x) + 3.14159, k) - k * 0.5);
-    p = vec2(cos(a), sin(a)) * length(p);
-    uv = clamp(p / asp + 0.5, 0.0, 1.0);
-  }
   // pixelation
   if (uPixel > 0.0) {
     float cells = mix(400.0, 20.0, uPixel);
@@ -694,6 +698,15 @@ void main() {
     float lv = mix(24.0, 3.0, uPoster);
     col = floor(col * lv + 0.5) / lv;
   }
+
+  return col;
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  // a mirror change blends the old fold into the new one over the fade
+  vec3 col = shade(fold(uv, uMirror));
+  if (uMirrorMix < 1.0) col = mix(shade(fold(uv, uMirrorFrom)), col, uMirrorMix);
 
   // clean source overlay (logo / camera) on top
   if (uSrcOpacity > 0.0) {

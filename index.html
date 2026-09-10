@@ -82,8 +82,18 @@
   details[open] summary::after { content: '\2013'; }
   details > .body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 
-  .slider { display: grid; grid-template-columns: 64px 1fr 64px; align-items: center; gap: 8px; }
-  .slider span:last-child { text-align: right; color: var(--dim); white-space: nowrap; }
+  .slider { display: grid; grid-template-columns: 64px 1fr 64px 16px; align-items: center; gap: 8px; }
+  .slider span:nth-child(3) { text-align: right; color: var(--dim); white-space: nowrap; }
+
+  /* lock toggles: exclude a setting from randomization */
+  .lock { border: 0; padding: 0; width: 16px; height: 16px; color: var(--dim); display: inline-flex; align-items: center; justify-content: center; opacity: 0.6; vertical-align: middle; }
+  .lock:hover { opacity: 1; color: var(--ink); }
+  .lock.on { color: var(--acc); opacity: 1; }
+  .lock svg { width: 12px; height: 12px; }
+  .lock .closed { display: none; }
+  .lock.on .closed { display: block; }
+  .lock.on .open { display: none; }
+  .lbl .lock { margin-left: 6px; }
   input[type=range] { -webkit-appearance: none; width: 100%; height: 14px; background: transparent; cursor: pointer; }
   input[type=range]::-webkit-slider-runnable-track { height: 1px; background: var(--line); }
   input[type=range]::-webkit-slider-thumb {
@@ -98,7 +108,7 @@
   body.learning [data-target].armed { outline: 2px solid var(--acc); }
   body.learning .slider span:first-child { color: var(--acc); }
 
-  .meters { display: grid; grid-template-columns: 34px 1fr; gap: 3px 8px; align-items: center; margin-top: 2px; }
+  .meters { display: grid; grid-template-columns: 38px 1fr; gap: 3px 8px; align-items: center; margin-top: 2px; }
   .meters .bar { height: 5px; background: var(--line); overflow: hidden; }
   .meters .bar i { display: block; height: 100%; width: 100%; background: var(--ink); transform-origin: left; transform: scaleX(0); }
   .meters .bar.acc i { background: var(--acc); }
@@ -144,11 +154,12 @@
     <button id="randomCycle" data-target="randomCycle">RANDOM CYCLE</button>
     <button id="random" data-target="random">RANDOM</button>
     <button id="vary" data-target="vary" title="new variation of the current modes">VARY</button>
+    <button class="lock" data-lock="seed" title="lock variation seeds"><svg class="open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0"/></svg><svg class="closed" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg></button>
     <button id="stage">STAGE OUTPUT</button>
   </div>
 
   <div>
-    <div class="lbl">MODE <b id="modeName"></b><i id="modeBlurb"></i></div>
+    <div class="lbl">MODE <b id="modeName"></b><button class="lock" data-lock="mode" title="lock mode"><svg class="open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0"/></svg><svg class="closed" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg></button><i id="modeBlurb"></i></div>
     <div class="row" id="modes"></div>
   </div>
 
@@ -157,28 +168,30 @@
     <select id="layerB" data-target="layerSel"></select>
     <select id="blend" data-target="blendSel"></select>
     <select id="paletteB" data-target="palBSel" title="palette for layer B"></select>
+    <button class="lock" data-lock="layerB" title="lock layer B, blend and its palette"><svg class="open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0"/></svg><svg class="closed" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg></button>
   </div>
 
   <div>
-    <div class="lbl">PALETTE</div>
+    <div class="lbl">PALETTE<button class="lock" data-lock="palette" title="lock palette"><svg class="open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0"/></svg><svg class="closed" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg></button></div>
     <div class="row" id="palettes"></div>
   </div>
 
-  <div class="slider"><span>CORRUPT</span><input id="corrupt" type="range" min="0" max="1" step="0.01"><span id="corruptVal"></span></div>
-  <div class="slider"><span>DECAY</span><input id="decay" type="range" min="0" max="1" step="0.01"><span id="decayVal"></span></div>
-  <div class="slider"><span>SENS</span><input id="sens" type="range" min="0.2" max="4" step="0.05"><span id="sensVal"></span></div>
-  <div class="slider"><span>FOCUS</span><input id="focus" type="range" min="0" max="1" step="0.01"><span id="focusVal"></span></div>
-  <div class="slider"><span>CYCLE</span><input id="cycle" type="range" min="1" max="64" step="1"><span id="cycleVal"></span></div>
-  <div class="slider"><span>FADE</span><input id="fade" type="range" min="0" max="10" step="0.1"><span id="fadeVal"></span></div>
-  <div class="slider"><span>RES</span><input id="res" type="range" min="0.2" max="1" step="0.05"><span id="resVal"></span></div>
+  <div class="slider"><span>CORRUPT</span><input id="corrupt" type="range" min="0" max="1" step="0.01"><span id="corruptVal"></span><button class="lock" data-lock="corrupt" title="lock"><svg class="open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0"/></svg><svg class="closed" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg></button></div>
+  <div class="slider"><span>DECAY</span><input id="decay" type="range" min="0" max="1" step="0.01"><span id="decayVal"></span><button class="lock" data-lock="decay" title="lock"><svg class="open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0"/></svg><svg class="closed" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg></button></div>
+  <div class="slider"><span>SENS</span><input id="sens" type="range" min="0.2" max="4" step="0.05"><span id="sensVal"></span><button class="lock" data-lock="sens" title="lock"><svg class="open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0"/></svg><svg class="closed" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg></button></div>
+  <div class="slider"><span>FOCUS</span><input id="focus" type="range" min="0" max="1" step="0.01"><span id="focusVal"></span><span></span></div>
+  <div class="slider"><span>DYNAMICS</span><input id="dynamics" type="range" min="0" max="1" step="0.01"><span id="dynamicsVal"></span><span></span></div>
+  <div class="slider"><span>CYCLE</span><input id="cycle" type="range" min="1" max="64" step="1"><span id="cycleVal"></span><button class="lock" data-lock="cycle" title="lock"><svg class="open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0"/></svg><svg class="closed" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg></button></div>
+  <div class="slider"><span>FADE</span><input id="fade" type="range" min="0" max="10" step="0.1"><span id="fadeVal"></span><span></span></div>
+  <div class="slider"><span>RES</span><input id="res" type="range" min="0.2" max="1" step="0.05"><span id="resVal"></span><span></span></div>
 
   <details id="fxSection" open>
     <summary>FX</summary>
     <div class="body">
-      <div class="slider"><span>MIRROR</span><input id="mirror" type="range" min="0" max="8" step="1"><span id="mirrorVal"></span></div>
-      <div class="slider"><span>PIXEL</span><input id="pixel" type="range" min="0" max="1" step="0.01"><span id="pixelVal"></span></div>
-      <div class="slider"><span>HUE</span><input id="hue" type="range" min="0" max="1" step="0.01"><span id="hueVal"></span></div>
-      <div class="slider"><span>POSTER</span><input id="poster" type="range" min="0" max="1" step="0.01"><span id="posterVal"></span></div>
+      <div class="slider"><span>MIRROR</span><input id="mirror" type="range" min="0" max="8" step="1"><span id="mirrorVal"></span><button class="lock" data-lock="mirror" title="lock"><svg class="open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0"/></svg><svg class="closed" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg></button></div>
+      <div class="slider"><span>PIXEL</span><input id="pixel" type="range" min="0" max="1" step="0.01"><span id="pixelVal"></span><button class="lock" data-lock="pixel" title="lock"><svg class="open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0"/></svg><svg class="closed" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg></button></div>
+      <div class="slider"><span>HUE</span><input id="hue" type="range" min="0" max="1" step="0.01"><span id="hueVal"></span><button class="lock" data-lock="hue" title="lock"><svg class="open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0"/></svg><svg class="closed" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg></button></div>
+      <div class="slider"><span>POSTER</span><input id="poster" type="range" min="0" max="1" step="0.01"><span id="posterVal"></span><button class="lock" data-lock="poster" title="lock"><svg class="open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0"/></svg><svg class="closed" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg></button></div>
     </div>
   </details>
 
@@ -192,11 +205,11 @@
         <span id="srcTxt" class="lbl" style="margin:0 0 0 6px"></span>
         <input type="file" id="imageFile" accept="image/*">
       </div>
-      <div class="slider"><span>BURN</span><input id="srcBurn" type="range" min="0" max="1" step="0.01"><span id="srcBurnVal"></span></div>
-      <div class="slider"><span>OVERLAY</span><input id="srcOpacity" type="range" min="0" max="1" step="0.01"><span id="srcOpacityVal"></span></div>
-      <div class="slider"><span>SIZE</span><input id="srcSize" type="range" min="0.05" max="1.5" step="0.01"><span id="srcSizeVal"></span></div>
-      <div class="slider"><span>X</span><input id="srcX" type="range" min="0" max="1" step="0.01"><span id="srcXVal"></span></div>
-      <div class="slider"><span>Y</span><input id="srcY" type="range" min="0" max="1" step="0.01"><span id="srcYVal"></span></div>
+      <div class="slider"><span>BURN</span><input id="srcBurn" type="range" min="0" max="1" step="0.01"><span id="srcBurnVal"></span><span></span></div>
+      <div class="slider"><span>OVERLAY</span><input id="srcOpacity" type="range" min="0" max="1" step="0.01"><span id="srcOpacityVal"></span><span></span></div>
+      <div class="slider"><span>SIZE</span><input id="srcSize" type="range" min="0.05" max="1.5" step="0.01"><span id="srcSizeVal"></span><span></span></div>
+      <div class="slider"><span>X</span><input id="srcX" type="range" min="0" max="1" step="0.01"><span id="srcXVal"></span><span></span></div>
+      <div class="slider"><span>Y</span><input id="srcY" type="range" min="0" max="1" step="0.01"><span id="srcYVal"></span><span></span></div>
     </div>
   </details>
 
@@ -231,6 +244,7 @@
     <span>BASS</span><div class="bar"><i id="m-bass"></i></div>
     <span>MID</span><div class="bar"><i id="m-mid"></i></div>
     <span>TRB</span><div class="bar"><i id="m-treble"></i></div>
+    <span>LOUD</span><div class="bar"><i id="m-energy"></i></div>
   </div>
   <div class="flags">
     <span class="flag" id="beat">BEAT</span>

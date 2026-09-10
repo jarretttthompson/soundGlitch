@@ -49,6 +49,9 @@ export class Engine {
     this.layers[1].mode = -1;
     this.blend = 1;
     this.fx = { mirror: 0, pixel: 0, hue: 0, poster: 0 };
+    this.mirrorFrom = 0;
+    this.mirrorT = 1;
+    this.mirrorDur = 0;
 
     this.programs = MODES.map(m => this._link(COMMON + m.src, m.name));
     this.sims = MODES.map(m => (m.sim ? this._link(SIM_PRELUDE + m.sim, m.name + ' sim') : null));
@@ -298,6 +301,19 @@ export class Engine {
     }
     L.palette = i;
   }
+  // Mirror segments are discrete, so a change crossfades the two folds in the post pass.
+  setMirror(m, dur = 0) {
+    if (m === this.fx.mirror) return;
+    if (dur > 0) {
+      this.mirrorFrom = this.mirrorT < 0.5 ? this.mirrorFrom : this.fx.mirror;
+      this.mirrorT = 0;
+      this.mirrorDur = dur;
+    } else {
+      this.mirrorT = 1;
+    }
+    this.fx.mirror = m;
+  }
+
   get palette() { return this.layers[0].palette; }
   set palette(i) { this.layers[0].palette = i; }
 
@@ -452,7 +468,10 @@ export class Engine {
     gl.uniform1i(this._u(P, 'uBlend'), this.blend);
     gl.uniform4f(this._u(P, 'uSrcRect'), ...this._srcRect());
     gl.uniform1f(this._u(P, 'uSrcOpacity'), hasSrc ? this.src.opacity : 0);
+    if (this.mirrorT < 1) this.mirrorT = Math.min(1, this.mirrorT + dt / Math.max(0.01, this.mirrorDur));
     gl.uniform1f(this._u(P, 'uMirror'), this.fx.mirror);
+    gl.uniform1f(this._u(P, 'uMirrorFrom'), this.mirrorFrom);
+    gl.uniform1f(this._u(P, 'uMirrorMix'), this.mirrorT < 1 ? smooth(this.mirrorT) : 1);
     gl.uniform1f(this._u(P, 'uPixel'), this.fx.pixel);
     gl.uniform1f(this._u(P, 'uHue'), this.fx.hue);
     gl.uniform1f(this._u(P, 'uPoster'), this.fx.poster);

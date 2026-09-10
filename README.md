@@ -45,6 +45,14 @@ seconds after starting to settle.
 - FOCUS is music focus: a speech-versus-music detector (tempo confidence
   plus sub-bass presence) ducks the reaction during announcements. 0% does
   nothing, 100% goes almost still when someone talks between songs.
+- DYNAMICS makes soft sound calmer. The analyser auto-gains everything so
+  the shaders always get a full-range signal; DYNAMICS scales that back by
+  how loud the room actually is, measured in dB against the loudest passage
+  heard in the last minute or two (the LOUD meter shows it). At 0% a whisper
+  drives the visuals as hard as a drop; at 100% the reaction, the drift
+  speed, the corruption and the auto-cycle rate all follow the loudness.
+  The reference forgets slowly, about 30 dB over 75 s, so a quiet song after
+  a loud one stays calm, and a quiet set calibrates itself within a minute.
 - FADE is the crossfade length for mode and palette changes, 0 (hard cut)
   to 10 s. During a mode fade the outgoing mode keeps running on its own
   buffers and the post pass mixes the two; palettes blend inside the shaders.
@@ -68,6 +76,11 @@ seconds after starting to settle.
   avoids the last six modes and five palettes so runs don't repeat. FADE
   and auto-cycle are left alone.
 - VARY (`v`) rerolls only the variation seeds: same modes, new structure.
+- Locks: the small padlock beside a setting excludes it from RANDOM,
+  RANDOM CYCLE and VARY. Lockable: mode, palette, the variation seeds
+  (padlock next to VARY), the whole layer B row, CORRUPT, DECAY, SENS,
+  CYCLE and each FX slider. FOCUS, DYNAMICS, FADE, RES and the source
+  placement are never randomized. Locks persist with your settings.
 - Variation seeds: every mode reads four random numbers that change its
   structure, not just its motion. Grid sizes, ring radii, string counts,
   kaleidoscope segments, scroll direction, sweep direction, lissajous
@@ -77,7 +90,10 @@ seconds after starting to settle.
   scenes, so a scene recalls the exact look.
 - FX: MIRROR folds the output into a 2 to 8 way kaleidoscope, PIXEL
   quantises it, HUE rotates every colour, POSTER crushes it to a few
-  levels. They stack with any mode, layer and palette.
+  levels. They stack with any mode, layer and palette. A MIRROR change
+  from RANDOM, a scene or OSC crossfades the two folds over the fade
+  time; the other three glide like the sliders. Dragging MIRROR by hand
+  is immediate.
 - Settings persist in localStorage.
 
 ## Layer B
@@ -126,7 +142,7 @@ Then switch on OSC BRIDGE in the panel. Addresses:
 
 | address | args | effect |
 |---------|------|--------|
-| `/sg/corrupt` `/sg/decay` `/sg/sens` `/sg/focus` `/sg/fade` `/sg/res` `/sg/mirror` `/sg/pixel` `/sg/hue` `/sg/poster` `/sg/srcBurn` `/sg/srcOpacity` `/sg/srcSize` `/sg/srcX` `/sg/srcY` | f 0..1 | slider, as a fraction of its range |
+| `/sg/corrupt` `/sg/decay` `/sg/sens` `/sg/focus` `/sg/dynamics` `/sg/fade` `/sg/res` `/sg/mirror` `/sg/pixel` `/sg/hue` `/sg/poster` `/sg/srcBurn` `/sg/srcOpacity` `/sg/srcSize` `/sg/srcX` `/sg/srcY` | f 0..1 | slider, as a fraction of its range |
 | `/sg/vary` | | new variation seeds, same modes |
 | `/sg/cycle` | i | beats between auto-cycle steps |
 | `/sg/mode` | i | mode by index (0-based) |

@@ -25,14 +25,30 @@ try {
 }
 
 const DEFAULTS = {
-  mode: 0, palette: 0, corrupt: 0.5, decay: 0.65, sens: 1.0, focus: 0.5,
+  mode: 0, palette: 0, corrupt: 0.5, decay: 0.65, sens: 1.0, focus: 0.5, dynamics: 0.6,
   auto: false, cycleScenes: false, randomCycle: false, cycle: 16, fade: 2, res: 0.7,
   layerB: -1, blend: 1, paletteB: -1,
   seed: [0.5, 0.5, 0.5, 0.5], seedB: [0.5, 0.5, 0.5, 0.5],
   mirror: 0, pixel: 0, hue: 0, poster: 0,
   srcBurn: 0, srcOpacity: 0, srcSize: 0.5, srcX: 0.5, srcY: 0.5,
   osc: false, midi: false,
+  locks: {},   // { key: true } settings excluded from RANDOM / RANDOM CYCLE / VARY
 };
+// what each lock covers when randomizing
+const LOCK_GROUPS = {
+  mode: ['mode'], palette: ['palette'], seed: ['seed', 'seedB'],
+  layerB: ['layerB', 'blend', 'paletteB'],
+  corrupt: ['corrupt'], decay: ['decay'], sens: ['sens'], cycle: ['cycle'],
+  mirror: ['mirror'], pixel: ['pixel'], hue: ['hue'], poster: ['poster'],
+};
+function locked(key) {
+  for (const [lock, keys] of Object.entries(LOCK_GROUPS)) if (params.locks[lock] && keys.includes(key)) return true;
+  return false;
+}
+function stripLocked(target) {
+  for (const k of Object.keys(target)) if (locked(k)) delete target[k];
+  return target;
+}
 // what a scene captures (not input, cycling or transport settings)
 const SCENE_KEYS = ['mode', 'palette', 'corrupt', 'decay', 'sens', 'focus', 'cycle', 'fade',
                     'layerB', 'blend', 'paletteB', 'seed', 'seedB', 'mirror', 'pixel', 'hue', 'poster',
@@ -54,6 +70,7 @@ let tween = null; // { from, to, t, dur }
 const smoothstep = t => t * t * (3 - 2 * t);
 
 const params = Object.assign({}, DEFAULTS, load());
+if (!params.locks || typeof params.locks !== 'object') params.locks = {};
 function load() {
   try { return JSON.parse(localStorage.getItem(STORE) || '{}'); } catch (_) { return {}; }
 }
@@ -76,7 +93,7 @@ function apply(fade = params.fade) {
   if (!Array.isArray(params.seedB) || params.seedB.length !== 4) params.seedB = DEFAULTS.seedB.slice();
   engine.setMode(params.mode, fade, 0, params.seed);
   engine.setMode(params.layerB, fade, 1, params.seedB);
-  engine.fx.mirror = params.mirror;
+  engine.setMirror(params.mirror, fade);
   engine.fx.pixel = params.pixel;
   engine.fx.hue = params.hue;
   engine.fx.poster = params.poster;
@@ -92,6 +109,7 @@ function apply(fade = params.fade) {
   if (Math.abs(engine.scale - params.res) > 0.001) engine.setScale(params.res);
   audio.sens = params.sens;
   audio.focus = params.focus;
+  audio.dynamics = params.dynamics;
 }
 function commit(fade = params.fade) {
   apply(fade);
@@ -160,8 +178,8 @@ function randomize() {
   const chance = p => Math.random() < p;
   if (!recentModes.includes(params.mode)) recentModes.push(params.mode);
   if (!recentPals.includes(params.palette)) recentPals.push(params.palette);
-  const mode = pickFresh(MODES.length, recentModes, 6);
-  const pal = pickFresh(PALETTES.length, recentPals, 5);
+  const mode = locked('mode') ? params.mode : pickFresh(MODES.length, recentModes, 6);
+  const pal = locked('palette') ? params.palette : pickFresh(PALETTES.length, recentPals, 5);
   const target = {
     mode, palette: pal,
     seed: rand4(), seedB: rand4(),
@@ -184,11 +202,12 @@ function randomize() {
     target.paletteB = chance(0.5) ? -1 : pick(PALETTES.length);
   }
   sceneIdx = -1;
-  transitionTo(target);
+  transitionTo(stripLocked(target));
 }
 
 // New variation of the current modes only: reroll the seeds, keep everything else.
 function vary() {
+  if (locked('seed')) return;
   sceneIdx = -1;
   transitionTo({ seed: rand4(), seedB: rand4() });
 }
@@ -264,7 +283,7 @@ palBSel.addEventListener('change', () => setPaletteB(+palBSel.value));
 palBSel.addEventListener('mousedown', e => { if (midi.learning) { e.preventDefault(); midi.arm('palBSel'); } });
 
 const sliders = {};
-for (const k of ['corrupt', 'decay', 'sens', 'focus', 'cycle', 'fade', 'res', 'mirror', 'pixel', 'hue', 'poster', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY']) {
+for (const k of ['corrupt', 'decay', 'sens', 'focus', 'dynamics', 'cycle', 'fade', 'res', 'mirror', 'pixel', 'hue', 'poster', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY']) {
   const el = $(`#${k}`);
   sliders[k] = el;
   el.dataset.target = k;
@@ -299,6 +318,22 @@ function refreshSliders() {
   }
 }
 
+// lock toggles: exclude a setting from RANDOM / RANDOM CYCLE / VARY
+document.querySelectorAll('.lock').forEach(b => {
+  b.addEventListener('click', e => {
+    e.stopPropagation();
+    const k = b.dataset.lock;
+    params.locks[k] = !params.locks[k];
+    refreshLocks();
+    save();
+  });
+});
+function refreshLocks() {
+  document.querySelectorAll('.lock').forEach(b => b.classList.toggle('on', !!params.locks[b.dataset.lock]));
+  const n = Object.values(params.locks).filter(Boolean).length;
+  $('#random').title = n ? `${n} setting${n > 1 ? 's' : ''} locked` : 'reroll everything';
+}
+
 function refreshUI() {
   $('#modeName').textContent = MODES[params.mode].name;
   $('#modeBlurb').textContent = MODES[params.mode].blurb;
@@ -311,6 +346,7 @@ function refreshUI() {
   $('#cycleScenes').classList.toggle('on', params.cycleScenes);
   $('#randomCycle').classList.toggle('on', params.randomCycle);
   refreshSliders();
+  refreshLocks();
   $('#osc').classList.toggle('on', params.osc);
   $('#midi').classList.toggle('on', params.midi);
   refreshScenes();
@@ -682,16 +718,22 @@ poke();
 
 // ---- loop ----------------------------------------------------------------
 
-const meters = ['level', 'bass', 'mid', 'treble'].map(k => [k, $(`#m-${k}`)]);
+const meters = ['level', 'bass', 'mid', 'treble', 'energy'].map(k => [k, $(`#m-${k}`)]);
 let t0 = performance.now(), last = t0, lastCycle = 0, lastBeatCount = 0, dueSince = -1;
+let visTime = 0; // shader time; advances slower when the sound is soft and DYNAMICS is up
+const lerp = (a, b, t) => a + (b - a) * t;
 
-// seconds to wait for a mode change when no beats are being detected
-function cycleFallback() { return Math.max(3, params.cycle * 0.75); }
+// seconds to wait for a mode change when no beats are being detected;
+// stretches when the sound is soft so quiet passages also cycle less
+function cycleFallback() {
+  const calm = lerp(1, 0.4 + 0.6 * audio.energy, params.dynamics);
+  return Math.max(3, params.cycle * 0.75 / calm);
+}
 
 function stepCycle() {
   if (params.randomCycle) randomize();
   else if (params.cycleScenes && scenes.list.length) loadScene(wrap(sceneIdx + 1, scenes.list.length));
-  else transitionTo({ mode: wrap(params.mode + 1, MODES.length), seed: rand4() }); // next mode, fresh variation
+  else transitionTo(stripLocked({ mode: wrap(params.mode + 1, MODES.length), seed: rand4() })); // next mode, fresh variation
 }
 
 function frame(now) {
@@ -702,11 +744,15 @@ function frame(now) {
   audio.update();
   if (ROLE === 'controller') stepTween(dt);
   engine.resize();
-  engine.render(audio, params, time, dt);
+  // dynamics: soft sound slows the drift and calms the corruption as well as the reaction
+  const calm = lerp(1, 0.25 + 0.75 * audio.energy, params.dynamics);
+  visTime += dt * calm;
+  const renderParams = calm < 0.999 ? Object.assign({}, params, { corrupt: params.corrupt * calm }) : params;
+  engine.render(audio, renderParams, visTime, dt);
   if (ROLE === 'controller') link.sendAudio(audio.features());
 
   if (ROLE === 'controller') {
-    for (const [k, el] of meters) el.style.transform = `scaleX(${Math.min(1, audio[k] / 1.2)})`;
+    for (const [k, el] of meters) el.style.transform = `scaleX(${Math.min(1, k === 'energy' ? audio.energy : audio[k] / 1.2)})`;
     $('#beat').classList.toggle('hit', audio.beat > 0.5);
     $('#tick').classList.toggle('hit', audio.tempoBeat > 0.5);
     $('#clip').classList.toggle('hit', audio.clip);
@@ -751,6 +797,7 @@ engine.layers[0].mode = params.mode;
 engine.layers[1].mode = params.layerB;
 engine.layers[0].palette = params.palette;
 engine.layers[1].palette = params.paletteB < 0 ? params.palette : params.paletteB;
+engine.fx.mirror = params.mirror;
 if (Array.isArray(params.seed) && params.seed.length === 4) engine.layers[0].seed = params.seed.slice();
 if (Array.isArray(params.seedB) && params.seedB.length === 4) engine.layers[1].seed = params.seedB.slice();
 apply(0);
