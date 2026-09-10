@@ -533,6 +533,205 @@ void main() {
   fragColor = vec4(max(col, prev), 1.0);
 }`,
   },
+  {
+    name: 'WARP',
+    blurb: 'domain-warped noise field, bass bends the warp',
+    src: `
+float fbm(vec2 p) {
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 4; i++) { v += a * noise(p); p = p * 2.03 + vec2(1.7, 9.2); a *= 0.5; }
+  return v;
+}
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec2 p = (uv - 0.5) * aspect();
+  float sc = 1.5 + 3.0 * uSeed.x;
+  vec2 q = vec2(fbm(p * sc + uTime * 0.1), fbm(p * sc + vec2(5.2, 1.3) - uTime * 0.07));
+  float warp = 0.5 + 2.0 * uBass + 2.0 * uSeed.y;
+  vec2 r = vec2(fbm(p * sc + warp * q + vec2(1.7, 9.2) + 0.15 * uTime), fbm(p * sc + warp * q + vec2(8.3, 2.8)));
+  float f = fbm(p * sc + warp * r);
+  float s = spec(fract(f * 2.0) * 0.5);
+  vec3 col = palette(f * 1.5 + uSeed.z + uTime * 0.03) * (0.3 + 0.9 * f) * (0.5 + s);
+  col += palette(0.5 + f) * smoothstep(0.55, 0.65, f) * uBeat;
+
+  float rot = 0.004 * sign(uSeed.w - 0.5) * (1.0 + uTreble);
+  mat2 R = mat2(cos(rot), -sin(rot), sin(rot), cos(rot));
+  vec2 fuv = (R * p * 0.99) / aspect() + 0.5;
+  vec3 prev = texture(uPrev, fuv).rgb * uDecay;
+  fragColor = vec4(mix(prev, col, 0.2 + 0.5 * uLevel), 1.0);
+}`,
+  },
+  {
+    name: 'GRID',
+    blurb: 'perspective floor rushing past, columns lit by bands, waveform horizon',
+    src: `
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec2 p = (uv - 0.5) * aspect();
+  float horizon = 0.05 + 0.1 * (uSeed.y - 0.5);
+  float flip = uSeed.w > 0.5 ? 1.0 : -1.0;   // floor below or ceiling above
+  float y = (p.y - horizon) * flip;
+  vec3 col = vec3(0.0);
+  if (y < 0.0) {
+    float z = 0.08 / (-y);
+    float x = p.x * z;
+    float speed = uTime * (1.0 + 3.0 * uLevel);
+    float xs = 1.0 + 2.0 * uSeed.z, zs = 0.5 + uSeed.x;
+    float gz = fract(z * zs - speed);
+    float gx = fract(x * xs);
+    float lineZ = smoothstep(0.08, 0.0, min(gz, 1.0 - gz) * z * 0.3);
+    float lineX = smoothstep(0.08, 0.0, min(gx, 1.0 - gx) * z * 0.3);
+    float band = spec(fract(floor(x * xs) * 0.13) * 0.5);
+    col = palette(0.6 + 0.3 * fract(z * 0.1) + uTime * 0.05) * max(lineZ, lineX) * (0.6 + 0.8 * band);
+    col *= 1.0 - smoothstep(2.0, 20.0, z);
+    vec2 tile = floor(vec2(x * xs, z * zs - speed));
+    float glow = step(0.93 - 0.25 * uBeat, hash21(tile + floor(uBeatCount)));
+    col += palette(hash21(tile)) * glow * 0.5 * uBeat;
+  } else {
+    float w = wav(uv.x * 0.5 + uTime * 0.02) * 0.05 * uLevel;
+    float line = smoothstep(0.006, 0.0, abs(y - 0.01 - w));
+    vec2 sc = p - vec2(0.0, horizon + 0.18 * flip);
+    float sun = smoothstep(0.25, 0.0, length(sc)) * step(0.5, fract(sc.y * 30.0 + uTime * 0.5));
+    col = palette(0.1 + uTime * 0.02) * line * 1.2 + palette(0.85) * sun * 0.6 * (0.5 + uBass);
+  }
+  vec3 prev = texture(uPrev, uv + vec2(0.0, 0.002 * flip)).rgb * uDecay * 0.8;
+  fragColor = vec4(max(col, prev), 1.0);
+}`,
+  },
+  {
+    name: 'HEX',
+    blurb: 'hex cells pulsing to their own bands, flipping on beats',
+    src: `
+vec4 hexCoords(vec2 p) {
+  const vec2 s = vec2(1.0, 1.7320508);
+  vec4 hc = floor(vec4(p, p - vec2(0.5, 1.0)) / s.xyxy) + 0.5;
+  vec4 h = vec4(p - hc.xy * s, p - (hc.zw + 0.5) * s);
+  return dot(h.xy, h.xy) < dot(h.zw, h.zw) ? vec4(h.xy, hc.xy) : vec4(h.zw, hc.zw + 0.5);
+}
+float hexDist(vec2 p) { p = abs(p); return max(dot(p, normalize(vec2(1.0, 1.7320508))), p.x); }
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec2 p = (uv - 0.5) * aspect();
+  float sc = 6.0 + 14.0 * uSeed.x;
+  vec4 h = hexCoords(p * sc + vec2(uTime * 0.4 * (uSeed.w - 0.5), 0.0));
+  vec2 id = h.zw;
+  float d = hexDist(h.xy);
+  float band = spec(fract(hash21(id) * 3.0 + uSeed.y) * 0.5);
+  float flipT = step(0.97 - 0.2 * uBeat, hash21(id + floor(uBeatCount)));
+  float r = 0.5 * (0.3 + 0.7 * band);
+  float fill = smoothstep(r, r - 0.06, d);
+  float edge = smoothstep(0.5, 0.44, d) - smoothstep(0.46, 0.4, d);
+  vec3 col = palette(hash21(id) * 0.3 + uSeed.z + band * 0.3 + uTime * 0.03) * (fill * (0.4 + band) + edge * 0.25);
+  col = mix(col, 1.0 - col, flipT * uBeat * uCorrupt);
+  vec3 prev = texture(uPrev, uv).rgb * uDecay;
+  fragColor = vec4(max(col, prev * 0.95), 1.0);
+}`,
+  },
+  {
+    name: 'SPIRAL',
+    blurb: 'log-spiral arms carrying the spectrum, feedback pulls you in',
+    src: `
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec2 p = (uv - 0.5) * aspect();
+  float r = length(p);
+  float a = atan(p.y, p.x);
+  float arms = 1.0 + floor(uSeed.x * 4.0);
+  float tight = 3.0 + 6.0 * uSeed.y;
+  float dir = sign(uSeed.w - 0.5);
+  float sp = fract(log(r + 0.02) * tight + a * arms / 6.28318 + uTime * (0.2 + 0.6 * uLevel) * dir);
+  float band = spec(fract(log(r + 0.02) * 0.3 + uSeed.z) * 0.5);
+  float arm = smoothstep(0.35 - 0.2 * band, 0.0, abs(sp - 0.5));
+  vec3 col = palette(a / 6.28318 + r + uTime * 0.05) * arm * (0.3 + band);
+  col *= smoothstep(0.0, 0.1, r);
+  vec2 fuv = (p * (1.0 - 0.02 * dir * (0.5 + uBass))) / aspect() + 0.5;
+  vec3 prev = texture(uPrev, fuv).rgb * uDecay;
+  fragColor = vec4(max(col, prev), 1.0);
+}`,
+  },
+  {
+    name: 'GLYPH',
+    blurb: 'terminal of invented glyphs, rows typed by bands',
+    src: `
+float glyph(vec2 cell, vec2 f, float code) {
+  ivec2 g = ivec2(floor(f * vec2(5.0, 7.0)));
+  if (g.x < 0 || g.x > 4 || g.y < 0 || g.y > 6) return 0.0;
+  int idx = g.y * 3 + min(g.x, 4 - g.x);            // mirrored 5x7 bitmap, 21 bits
+  int bits = int(hash21(cell + code) * 2097152.0);
+  return float((bits >> idx) & 1);
+}
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  float cols = 24.0 + floor(uSeed.x * 40.0);
+  float rows = floor(cols * uRes.y / uRes.x * 0.7);
+  vec2 grid = vec2(cols, rows);
+  float scroll = floor(uTime * (1.0 + 6.0 * uLevel) * (0.5 + uSeed.y));
+  vec2 cell = floor(uv * grid) + vec2(0.0, scroll);
+  vec2 gf = (fract(uv * grid) - 0.1) / 0.8;
+  float band = spec(fract(cell.y / rows + uSeed.z) * 0.5);
+  float code = floor(band * 8.0);
+  float on = step(0.15, band) * step(hash21(cell * 0.37), 0.4 + band * 0.6);
+  float gl = glyph(cell, gf, code) * on;
+  vec3 col = palette(cell.y / rows * 0.3 + uSeed.w + band * 0.4) * gl * (0.6 + band);
+  float inv = step(0.95 - 0.3 * uBeat, hash21(vec2(cell.y, floor(uTime * 8.0)))) * uBeat * uCorrupt;
+  col = mix(col, vec3(on) - col, inv);
+  vec3 prev = texture(uPrev, uv + vec2(0.0, 2.0 / uRes.y)).rgb * uDecay * 0.85;
+  fragColor = vec4(max(col, prev), 1.0);
+}`,
+  },
+  {
+    name: 'FLARE',
+    blurb: 'beat-spawned bursts on a starfield, trails expand outward',
+    src: `
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec2 p = (uv - 0.5) * aspect();
+  // seconds since the last beat, recovered from the beat envelope
+  float age = clamp(-log(max(uBeat, 1e-4)) / 7.67, 0.0, 3.0);
+  vec2 c = (vec2(hash21(vec2(uBeatCount, 1.0)), hash21(vec2(uBeatCount, 2.0))) - 0.5) * vec2(0.8, 0.6) * (0.5 + uSeed.y);
+  float d = length(p - c);
+  float rad = age * (0.3 + 0.5 * uSeed.x);
+  float ring = smoothstep(0.03, 0.0, abs(d - rad)) * exp(-age * 1.5);
+  float ang = atan(p.y - c.y, p.x - c.x);
+  float spokes = pow(0.5 + 0.5 * cos(ang * (6.0 + floor(uSeed.z * 10.0)) + uBeatCount), 8.0)
+               * (1.0 - smoothstep(0.0, rad + 0.01, d)) * exp(-age * 3.0);
+  vec3 burst = palette(hash21(vec2(uBeatCount, 3.0)) + uSeed.w) * (ring * 2.0 + spokes);
+  vec2 sg = vec2(60.0, 40.0);
+  vec2 gc = floor(uv * sg), fc = fract(uv * sg);
+  float star = step(0.97, hash21(gc + uSeed.xy)) * smoothstep(0.3, 0.0, length(fc - 0.5)) * (0.3 + uTreble);
+  vec3 col = burst + vec3(star);
+  vec2 fuv = (p * (0.985 - 0.02 * uBass)) / aspect() + 0.5;
+  vec3 prev = texture(uPrev, fuv).rgb * uDecay;
+  fragColor = vec4(col + prev, 1.0);
+}`,
+  },
+  {
+    name: 'RIDGE',
+    blurb: 'stacked ridge lines, each a band, the waveform running through them',
+    src: `
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  float n = 12.0 + floor(uSeed.x * 24.0);
+  float scroll = uTime * (0.05 + 0.2 * uLevel) * sign(uSeed.w - 0.5);
+  float env = smoothstep(0.0, 0.25, uv.x) * smoothstep(1.0, 0.75, uv.x);
+  vec3 col = vec3(0.0);
+  for (int i = 0; i < 40; i++) {
+    if (float(i) >= n) break;
+    float t = 1.0 - (float(i) + 0.5) / n;     // back to front
+    float base = t * 0.9 + 0.05;
+    float s = spec(fract(t + uSeed.y) * 0.5);
+    float w = wav(uv.x * 0.4 + t * 0.2 + scroll);
+    float h = env * (0.02 + 0.12 * s * (0.5 + uSens * 0.5)) * (0.5 + 0.5 * w + noise(vec2(uv.x * 6.0 + t * 9.0, uTime * 0.3 + float(i))));
+    float y = base + h;
+    float line = smoothstep(0.004, 0.0, abs(uv.y - y));
+    float below = step(uv.y, y) * step(base - 0.001, uv.y);
+    col = mix(col, vec3(0.0), below * 0.9);
+    col += palette(t * 0.5 + uSeed.z + uTime * 0.02) * line * (0.6 + s);
+  }
+  vec3 prev = texture(uPrev, uv).rgb * uDecay * 0.7;
+  fragColor = vec4(max(col, prev), 1.0);
+}`,
+  },
 ];
 
 // Prelude for simulation shaders: same helpers, state comes in as uSim.
@@ -600,13 +799,20 @@ uniform sampler2D uTex;
 uniform sampler2D uTex2;
 uniform sampler2D uTexB;
 uniform sampler2D uTexB2;
+uniform sampler2D uTexC;
+uniform sampler2D uTexC2;
 uniform sampler2D uSrc;
 uniform float uMix;
 uniform float uMixB;
-uniform float uAlphaB;    // layer B opacity (fades in / out)
-uniform int   uBlend;
+uniform float uMixC;
+uniform float uAlphaB;    // layer opacity (fades in / out)
+uniform float uAlphaC;
+uniform int   uBlend;     // layer B blend, with crossfade state
 uniform int   uBlendFrom;
-uniform float uBlendMix;  // 1 = settled on uBlend
+uniform float uBlendMix;
+uniform int   uBlendC;    // layer C blend
+uniform int   uBlendCFrom;
+uniform float uBlendCMix;
 uniform vec4  uSrcRect;
 uniform float uSrcOpacity;
 uniform float uMirror;   // kaleidoscope segments, < 2 = off
@@ -646,6 +852,15 @@ vec3 blendFn(vec3 a, vec3 b, int m) {
   if (m == 5) return max(a, b);
   return mix(a, b, 0.5);
 }
+// composite one extra layer over col with its opacity, crossfading blend modes
+vec3 layerIn(vec3 col, sampler2D t, sampler2D t2, float m, float alpha, int bl, int blFrom, float blMix, vec2 suv, float ab) {
+  if (alpha <= 0.0) return col;
+  vec3 b = fetch(t, suv, ab);
+  if (m < 1.0) b = mix(fetch(t2, suv, ab), b, m);
+  vec3 blended = blendFn(col, b, bl);
+  if (blMix < 1.0) blended = mix(blendFn(col, b, blFrom), blended, blMix);
+  return mix(col, blended, alpha);
+}
 
 // kaleidoscope fold
 vec2 fold(vec2 uv, float m) {
@@ -681,14 +896,9 @@ vec3 shade(vec2 uv) {
   vec3 col = fetch(uTex, suv, ab);
   if (uMix < 1.0) col = mix(fetch(uTex2, suv, ab), col, uMix);
 
-  // layer B, blended in with its opacity; a blend-mode change mixes both results
-  if (uAlphaB > 0.0) {
-    vec3 b = fetch(uTexB, suv, ab);
-    if (uMixB < 1.0) b = mix(fetch(uTexB2, suv, ab), b, uMixB);
-    vec3 blended = blendFn(col, b, uBlend);
-    if (uBlendMix < 1.0) blended = mix(blendFn(col, b, uBlendFrom), blended, uBlendMix);
-    col = mix(col, blended, uAlphaB);
-  }
+  // layers B and C composited over A
+  col = layerIn(col, uTexB, uTexB2, uMixB, uAlphaB, uBlend, uBlendFrom, uBlendMix, suv, ab);
+  col = layerIn(col, uTexC, uTexC2, uMixC, uAlphaC, uBlendC, uBlendCFrom, uBlendCMix, suv, ab);
 
   // scanlines, vignette, dither
   col *= 0.86 + 0.14 * sin(uv.y * uRes.y * 3.14159);

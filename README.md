@@ -1,7 +1,7 @@
 # soundGlitch
 
 Microphone in, strange visuals out. A WebGL2 feedback engine driven by a Web
-Audio analyser: thirteen shader modes, twelve palettes, two blendable layers,
+Audio analyser: twenty shader modes, twelve palettes, three blendable layers,
 a logo or camera source, scenes, MIDI learn, OSC, and a pop-out output window.
 No build step. The only dependency is `ws` for the optional OSC bridge.
 
@@ -101,13 +101,15 @@ seconds after starting to settle.
   is immediate.
 - Settings persist in localStorage.
 
-## Layer B
+## Layers B and C
 
-The LAYER B dropdown runs a second mode on its own feedback buffers, and the
-blend dropdown composites it over the main layer: MIX, ADD, MULTIPLY, SCREEN,
-DIFFERENCE or LIGHTEN. The third dropdown gives layer B its own palette, or
-FOLLOW A to share the main one. Both layers crossfade on mode and palette
-changes.
+The LAYER B and LAYER C rows each run another mode on their own feedback
+buffers, with a blend dropdown (MIX, ADD, MULTIPLY, SCREEN, DIFFERENCE or
+LIGHTEN) for compositing over what's below, and a palette dropdown (or
+FOLLOW A to share the main one). C composites over A plus B. Every layer
+crossfades on mode, seed and palette changes, fades its opacity when
+switched on or off, and crossfades blend-mode changes. RANDOM adds layer B
+half the time and layer C a third of the time.
 
 ## Source (logo / camera)
 
@@ -157,6 +159,7 @@ Then switch on OSC BRIDGE in the panel. Addresses:
 | `/sg/layer` | i | layer B mode, -1 for off |
 | `/sg/blend` | i | blend mode 0..5 |
 | `/sg/paletteB` | i | layer B palette, -1 to follow A |
+| `/sg/layerC` `/sg/blendC` `/sg/paletteC` | i | same for layer C |
 | `/sg/scene` | i or s | load a scene by index or name |
 | `/sg/random` `/sg/clear` | | as the buttons |
 | `/sg/auto` `/sg/cycleScenes` `/sg/randomCycle` | i | 1 on, 0 off (no arg toggles) |
@@ -187,6 +190,13 @@ source is local to the controller.
 | SHATTER | voronoi shards, each listening to its own band, shoving the frame on beats |
 | INK | marbling: curl-noise fluid with two pens that follow the sound |
 | REACT | Gray-Scott reaction-diffusion in its own state buffer; bass feeds growth, the waveform seeds it |
+| WARP | domain-warped noise field, bass bends the warp, slow rotating feedback |
+| GRID | perspective floor rushing past, columns lit by bands, waveform on the horizon, beat-lit tiles |
+| HEX | hex cells pulsing to their own bands, inverting on beats |
+| SPIRAL | log-spiral arms carrying the spectrum, feedback pulls inward or outward |
+| GLYPH | a terminal of invented glyphs, each row typed by a band, rows invert on beats |
+| FLARE | beat-spawned bursts with spokes on a starfield, outward feedback leaves expanding rings |
+| RIDGE | stacked ridge lines, one per band, with the waveform running through them |
 
 Palettes: SPECTRUM, ACID, PHOSPHOR, HEAT, BRUISE, STROBE, VAPOR, ICE, AMBER,
 TOXIC, BLOOD, CGA.

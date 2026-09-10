@@ -28,7 +28,8 @@ const DEFAULTS = {
   mode: 0, palette: 0, corrupt: 0.5, decay: 0.65, sens: 1.0, focus: 0.5, dynamics: 0.6,
   auto: false, cycleScenes: false, randomCycle: false, cycle: 16, fade: 4, res: 0.7,
   layerB: -1, blend: 1, paletteB: -1,
-  seed: [0.5, 0.5, 0.5, 0.5], seedB: [0.5, 0.5, 0.5, 0.5],
+  layerC: -1, blendC: 3, paletteC: -1,
+  seed: [0.5, 0.5, 0.5, 0.5], seedB: [0.5, 0.5, 0.5, 0.5], seedC: [0.5, 0.5, 0.5, 0.5],
   mirror: 0, pixel: 0, hue: 0, poster: 0,
   srcBurn: 0, srcOpacity: 0, srcSize: 0.5, srcX: 0.5, srcY: 0.5,
   osc: false, midi: false,
@@ -36,8 +37,9 @@ const DEFAULTS = {
 };
 // what each lock covers when randomizing
 const LOCK_GROUPS = {
-  mode: ['mode'], palette: ['palette'], seed: ['seed', 'seedB'],
+  mode: ['mode'], palette: ['palette'], seed: ['seed', 'seedB', 'seedC'],
   layerB: ['layerB'], blend: ['blend'], paletteB: ['paletteB'],
+  layerC: ['layerC'], blendC: ['blendC'], paletteC: ['paletteC'],
   corrupt: ['corrupt'], decay: ['decay'], sens: ['sens'], focus: ['focus'], dynamics: ['dynamics'],
   cycle: ['cycle'], fade: ['fade'],
   mirror: ['mirror'], pixel: ['pixel'], hue: ['hue'], poster: ['poster'],
@@ -55,7 +57,8 @@ function stripLocked(target) {
 }
 // what a scene captures (not input, cycling or transport settings)
 const SCENE_KEYS = ['mode', 'palette', 'corrupt', 'decay', 'sens', 'focus', 'cycle', 'fade',
-                    'layerB', 'blend', 'paletteB', 'seed', 'seedB', 'mirror', 'pixel', 'hue', 'poster',
+                    'layerB', 'blend', 'paletteB', 'layerC', 'blendC', 'paletteC',
+                    'seed', 'seedB', 'seedC', 'mirror', 'pixel', 'hue', 'poster',
                     'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY'];
 // continuous values that glide to a new target over the fade time instead of jumping
 const TWEEN_KEYS = ['corrupt', 'decay', 'sens', 'focus', 'pixel', 'hue', 'poster', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY'];
@@ -94,10 +97,14 @@ function apply(fade = params.fade) {
   params.mode = wrap(params.mode, MODES.length);
   params.palette = wrap(params.palette, PALETTES.length);
   if (params.layerB >= MODES.length) params.layerB = -1;
-  if (!Array.isArray(params.seed) || params.seed.length !== 4) params.seed = DEFAULTS.seed.slice();
-  if (!Array.isArray(params.seedB) || params.seedB.length !== 4) params.seedB = DEFAULTS.seedB.slice();
+  for (const k of ['seed', 'seedB', 'seedC']) if (!Array.isArray(params[k]) || params[k].length !== 4) params[k] = DEFAULTS[k].slice();
+  if (params.layerC >= MODES.length) params.layerC = -1;
+  if (params.paletteC >= PALETTES.length) params.paletteC = -1;
   engine.setMode(params.mode, fade, 0, params.seed);
   engine.setMode(params.layerB, fade, 1, params.seedB);
+  engine.setMode(params.layerC, fade, 2, params.seedC);
+  engine.setPalette(params.paletteC < 0 ? params.palette : params.paletteC, fade, 2);
+  engine.setBlend(params.blendC, fade, 2);
   engine.setMirror(params.mirror, fade);
   engine.fx.pixel = params.pixel;
   engine.fx.hue = params.hue;
@@ -105,7 +112,7 @@ function apply(fade = params.fade) {
   engine.setPalette(params.palette, fade, 0);
   if (params.paletteB >= PALETTES.length) params.paletteB = -1;
   engine.setPalette(params.paletteB < 0 ? params.palette : params.paletteB, fade, 1);
-  engine.setBlend(params.blend, fade);
+  engine.setBlend(params.blend, fade, 1);
   engine.src.burn = params.srcBurn;
   engine.src.opacity = params.srcOpacity;
   engine.src.size = params.srcSize;
@@ -129,6 +136,9 @@ function setPalette(i, fade = params.fade) { params.palette = wrap(i, PALETTES.l
 function setLayerB(i, fade = params.fade) { params.layerB = Math.max(-1, Math.min(MODES.length - 1, i)); commit(fade); }
 function setBlend(i, fade = params.fade) { params.blend = wrap(i, BLENDS.length); commit(fade); }
 function setPaletteB(i, fade = params.fade) { params.paletteB = Math.max(-1, Math.min(PALETTES.length - 1, i)); commit(fade); }
+function setLayerC(i, fade = params.fade) { params.layerC = Math.max(-1, Math.min(MODES.length - 1, i)); commit(fade); }
+function setBlendC(i, fade = params.fade) { params.blendC = wrap(i, BLENDS.length); commit(fade); }
+function setPaletteC(i, fade = params.fade) { params.paletteC = Math.max(-1, Math.min(PALETTES.length - 1, i)); commit(fade); }
 function setAuto(v) { params.auto = v; commit(0); }
 // the two cycle flavours switch auto-cycle on when enabled; AUTO CYCLE is the master switch
 function setCycleScenes(v) { params.cycleScenes = v; if (v) { params.randomCycle = false; params.auto = true; } commit(0); }
@@ -194,7 +204,7 @@ function randomize() {
   const pal = locked('palette') ? params.palette : pickFresh(PALETTES.length, recentPals, 5);
   const target = {
     mode, palette: pal,
-    seed: rand4(), seedB: rand4(),
+    seed: rand4(), seedB: rand4(), seedC: rand4(),
     corrupt: +r(0, 1).toFixed(2),
     decay: +r(0.2, 1).toFixed(2),
     sens: +r(0.7, 2.2).toFixed(2),
@@ -212,6 +222,14 @@ function randomize() {
     target.layerB = b;
     target.blend = pick(BLENDS.length);
     target.paletteB = chance(0.5) ? -1 : pick(PALETTES.length);
+  }
+  target.layerC = -1;
+  if (chance(0.3)) {
+    let c = pick(MODES.length);
+    if (c === mode || c === target.layerB) c = (c + 2) % MODES.length;
+    target.layerC = c;
+    target.blendC = pick(BLENDS.length);
+    target.paletteC = chance(0.5) ? -1 : pick(PALETTES.length);
   }
   // normally locked; only rolled when the user unlocks them
   target.fade = [0.5, 1, 2, 3, 4, 6][pick(6)];
@@ -232,7 +250,7 @@ function randomize() {
 function vary() {
   if (locked('seed')) return;
   sceneIdx = -1;
-  transitionTo({ seed: rand4(), seedB: rand4() });
+  transitionTo({ seed: rand4(), seedB: rand4(), seedC: rand4() });
 }
 
 // ---- scenes --------------------------------------------------------------
@@ -305,6 +323,21 @@ PALETTES.forEach((p, i) => palBSel.appendChild(new Option(p, i)));
 palBSel.addEventListener('change', () => setPaletteB(+palBSel.value));
 palBSel.addEventListener('mousedown', e => { if (midi.learning) { e.preventDefault(); midi.arm('palBSel'); } });
 
+const layerCSel = $('#layerC');
+layerCSel.appendChild(new Option('C OFF', -1));
+MODES.forEach((m, i) => layerCSel.appendChild(new Option('C ' + m.name, i)));
+layerCSel.addEventListener('change', () => setLayerC(+layerCSel.value));
+layerCSel.addEventListener('mousedown', e => { if (midi.learning) { e.preventDefault(); midi.arm('layerCSel'); } });
+const blendCSel = $('#blendC');
+BLENDS.forEach((b, i) => blendCSel.appendChild(new Option(b, i)));
+blendCSel.addEventListener('change', () => setBlendC(+blendCSel.value));
+blendCSel.addEventListener('mousedown', e => { if (midi.learning) { e.preventDefault(); midi.arm('blendCSel'); } });
+const palCSel = $('#paletteC');
+palCSel.appendChild(new Option('FOLLOW A', -1));
+PALETTES.forEach((p, i) => palCSel.appendChild(new Option(p, i)));
+palCSel.addEventListener('change', () => setPaletteC(+palCSel.value));
+palCSel.addEventListener('mousedown', e => { if (midi.learning) { e.preventDefault(); midi.arm('palCSel'); } });
+
 const sliders = {};
 for (const k of ['corrupt', 'decay', 'sens', 'focus', 'dynamics', 'cycle', 'fade', 'res', 'mirror', 'pixel', 'hue', 'poster', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY']) {
   const el = $(`#${k}`);
@@ -376,6 +409,9 @@ function refreshUI() {
   layerSel.value = params.layerB;
   blendSel.value = params.blend;
   palBSel.value = params.paletteB;
+  layerCSel.value = params.layerC;
+  blendCSel.value = params.blendC;
+  palCSel.value = params.paletteC;
   $('#auto').classList.toggle('on', params.auto);
   $('#cycleScenes').classList.toggle('on', params.cycleScenes);
   $('#randomCycle').classList.toggle('on', params.randomCycle);
@@ -628,6 +664,9 @@ function act(target, value = 1, isCC = false, edge = true) {
     case 'layerSel': setLayerB(Math.floor(value * (n + 1)) - 1); break;
     case 'blendSel': setBlend(Math.min(BLENDS.length - 1, Math.floor(value * BLENDS.length))); break;
     case 'palBSel': setPaletteB(Math.floor(value * (PALETTES.length + 1)) - 1); break;
+    case 'layerCSel': setLayerC(Math.floor(value * (n + 1)) - 1); break;
+    case 'blendCSel': setBlendC(Math.min(BLENDS.length - 1, Math.floor(value * BLENDS.length))); break;
+    case 'palCSel': setPaletteC(Math.floor(value * (PALETTES.length + 1)) - 1); break;
     case 'next': if (edge) setMode(params.mode + 1); break;
     case 'prev': if (edge) setMode(params.mode - 1); break;
     case 'random': if (edge) randomize(); break;
@@ -669,6 +708,9 @@ function onOsc(address, args) {
     case 'layer': if (typeof v === 'number') setLayerB(v); break;
     case 'blend': if (typeof v === 'number') setBlend(v); break;
     case 'paletteB': if (typeof v === 'number') setPaletteB(v); break;
+    case 'layerC': if (typeof v === 'number') setLayerC(v); break;
+    case 'blendC': if (typeof v === 'number') setBlendC(v); break;
+    case 'paletteC': if (typeof v === 'number') setPaletteC(v); break;
     case 'scene': {
       if (typeof v === 'number') loadScene(v);
       else if (typeof v === 'string') { const i = scenes.list.indexOf(scenes.byName(v)); if (i >= 0) loadScene(i); }
@@ -827,17 +869,21 @@ window.addEventListener('resize', () => engine.resize());
 // ---- boot ----------------------------------------------------------------
 
 document.body.classList.toggle('output', ROLE === 'output');
-engine.layers[0].mode = params.mode;
-engine.layers[1].mode = params.layerB;
-engine.layers[0].palette = params.palette;
-engine.layers[1].palette = params.paletteB < 0 ? params.palette : params.paletteB;
-engine.fx.mirror = params.mirror;
-engine.blend = params.blend;
-engine.blendFrom = params.blend;
-engine.layers[1].alpha = params.layerB >= 0 ? 1 : 0;
-engine.layers[1].alphaTarget = engine.layers[1].alpha;
-if (Array.isArray(params.seed) && params.seed.length === 4) engine.layers[0].seed = params.seed.slice();
-if (Array.isArray(params.seedB) && params.seedB.length === 4) engine.layers[1].seed = params.seedB.slice();
+// initial state without any fade
+{
+  const modes = [params.mode, params.layerB, params.layerC];
+  const pals = [params.palette, params.paletteB, params.paletteC];
+  const seeds = [params.seed, params.seedB, params.seedC];
+  const blends = [1, params.blend, params.blendC];
+  engine.layers.forEach((L, i) => {
+    L.mode = i === 0 ? params.mode : (modes[i] >= 0 && modes[i] < MODES.length ? modes[i] : -1);
+    L.palette = i > 0 && pals[i] >= 0 ? pals[i] : params.palette;
+    if (Array.isArray(seeds[i]) && seeds[i].length === 4) L.seed = seeds[i].slice();
+    L.blend = L.blendFrom = blends[i];
+    L.alpha = L.alphaTarget = L.mode >= 0 ? 1 : 0;
+  });
+  engine.fx.mirror = params.mirror;
+}
 apply(0);
 refreshUI();
 setStatus();
@@ -854,4 +900,4 @@ if (ROLE === 'controller') {
 requestAnimationFrame(frame);
 
 // debug hooks
-window.sg = { audio, engine, params, scenes, midi, link, frame: () => frame(performance.now()), setMode, setPalette, setLayerB, setPaletteB, randomize, vary, transitionTo, loadScene, act, onOsc, apply, ROLE, tween: () => tween };
+window.sg = { audio, engine, params, scenes, midi, link, frame: () => frame(performance.now()), setMode, setPalette, setLayerB, setPaletteB, setLayerC, setBlendC, setPaletteC, randomize, vary, transitionTo, loadScene, act, onOsc, apply, ROLE, tween: () => tween };

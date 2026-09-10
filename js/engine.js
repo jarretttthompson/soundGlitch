@@ -36,6 +36,11 @@ class Layer {
     this.alphaTarget = 1;
     this.alphaDur = 0;
     this.pendingOff = false;
+    // how this layer composites over the ones below (unused for layer 0)
+    this.blend = 1;
+    this.blendFrom = 1;
+    this.blendT = 1;
+    this.blendDur = 0;
   }
   get fading() { return this.fadeT < 1; }
 }
@@ -50,14 +55,8 @@ export class Engine {
     this.halfFloat = !!gl.getExtension('EXT_color_buffer_float');
     this.scale = 0.7;
 
-    this.layers = [new Layer(), new Layer()];
-    this.layers[1].mode = -1;
-    this.layers[1].alpha = 0;
-    this.layers[1].alphaTarget = 0;
-    this.blend = 1;
-    this.blendFrom = 1;
-    this.blendT = 1;
-    this.blendDur = 0;
+    this.layers = [new Layer(), new Layer(), new Layer()];
+    for (const L of this.layers.slice(1)) { L.mode = -1; L.alpha = 0; L.alphaTarget = 0; }
     this.fx = { mirror: 0, pixel: 0, hue: 0, poster: 0 };
     this.mirrorFrom = 0;
     this.mirrorT = 1;
@@ -325,16 +324,17 @@ export class Engine {
   }
 
   // Blend modes are discrete, so a change crossfades the two results.
-  setBlend(i, dur = 0) {
-    if (i === this.blend) return;
+  setBlend(i, dur = 0, layer = 1) {
+    const L = this.layers[layer];
+    if (i === L.blend) return;
     if (dur > 0) {
-      this.blendFrom = this.blendT < 0.5 ? this.blendFrom : this.blend;
-      this.blendT = 0;
-      this.blendDur = dur;
+      L.blendFrom = L.blendT < 0.5 ? L.blendFrom : L.blend;
+      L.blendT = 0;
+      L.blendDur = dur;
     } else {
-      this.blendT = 1;
+      L.blendT = 1;
     }
-    this.blend = i;
+    L.blend = i;
   }
 
   get mode() { return this.layers[0].mode; }
@@ -503,6 +503,7 @@ export class Engine {
 
     const A = this._renderLayer(this.layers[0], audio, params, time, dt, burn);
     const B = this._renderLayer(this.layers[1], audio, params, time, dt, 0);
+    const C = this._renderLayer(this.layers[2], audio, params, time, dt, 0);
 
     // post pass to screen
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -515,18 +516,26 @@ export class Engine {
     bind(2, B ? B.tex : A.tex);
     bind(3, B ? B.outTex : A.tex);
     bind(4, this.srcTex);
+    bind(5, C ? C.tex : A.tex);
+    bind(6, C ? C.outTex : A.tex);
     gl.uniform1i(this._u(P, 'uTex'), 0);
     gl.uniform1i(this._u(P, 'uTex2'), 1);
     gl.uniform1i(this._u(P, 'uTexB'), 2);
     gl.uniform1i(this._u(P, 'uTexB2'), 3);
     gl.uniform1i(this._u(P, 'uSrc'), 4);
+    gl.uniform1i(this._u(P, 'uTexC'), 5);
+    gl.uniform1i(this._u(P, 'uTexC2'), 6);
     gl.uniform1f(this._u(P, 'uMix'), A.mix);
     gl.uniform1f(this._u(P, 'uMixB'), B ? B.mix : 1);
     gl.uniform1f(this._u(P, 'uAlphaB'), B ? B.alpha : 0);
-    if (this.blendT < 1) this.blendT = Math.min(1, this.blendT + dt / Math.max(0.01, this.blendDur));
-    gl.uniform1i(this._u(P, 'uBlend'), this.blend);
-    gl.uniform1i(this._u(P, 'uBlendFrom'), this.blendFrom);
-    gl.uniform1f(this._u(P, 'uBlendMix'), this.blendT < 1 ? smooth(this.blendT) : 1);
+    gl.uniform1f(this._u(P, 'uMixC'), C ? C.mix : 1);
+    gl.uniform1f(this._u(P, 'uAlphaC'), C ? C.alpha : 0);
+    for (const [L, name] of [[this.layers[1], ''], [this.layers[2], 'C']]) {
+      if (L.blendT < 1) L.blendT = Math.min(1, L.blendT + dt / Math.max(0.01, L.blendDur));
+      gl.uniform1i(this._u(P, 'uBlend' + name), L.blend);
+      gl.uniform1i(this._u(P, 'uBlend' + name + 'From'), L.blendFrom);
+      gl.uniform1f(this._u(P, 'uBlend' + name + 'Mix'), L.blendT < 1 ? smooth(L.blendT) : 1);
+    }
     gl.uniform4f(this._u(P, 'uSrcRect'), ...this._srcRect());
     gl.uniform1f(this._u(P, 'uSrcOpacity'), hasSrc ? this.src.opacity : 0);
     if (this.mirrorT < 1) this.mirrorT = Math.min(1, this.mirrorT + dt / Math.max(0.01, this.mirrorDur));
