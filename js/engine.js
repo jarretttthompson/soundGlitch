@@ -25,6 +25,10 @@ class Layer {
     this.sim = null;
     this.simRead = 0;
     this.simMode = -1;
+    this.palette = 0;
+    this.palFrom = 0;
+    this.palT = 1;
+    this.palDur = 0;
   }
   get fading() { return this.fadeT < 1; }
 }
@@ -41,11 +45,6 @@ export class Engine {
     this.layers = [new Layer(), new Layer()];
     this.layers[1].mode = -1;
     this.blend = 1;
-
-    this.palette = 0;
-    this.palFrom = 0;
-    this.palT = 1;
-    this.palDur = 0;
 
     this.programs = MODES.map(m => this._link(COMMON + m.src, m.name));
     this.sims = MODES.map(m => (m.sim ? this._link(SIM_PRELUDE + m.sim, m.name + ' sim') : null));
@@ -278,18 +277,21 @@ export class Engine {
   set mode(i) { this.layers[0].mode = i; }
   get fading() { return this.layers[0].fading; }
 
-  setPalette(i, dur = 0) {
-    if (i === this.palette) return;
+  setPalette(i, dur = 0, layer = 0) {
+    const L = this.layers[layer];
+    if (i === L.palette) return;
     if (dur > 0) {
       // mid-fade: keep whichever palette is currently more visible as the start
-      this.palFrom = this.palT < 0.5 ? this.palFrom : this.palette;
-      this.palT = 0;
-      this.palDur = dur;
+      L.palFrom = L.palT < 0.5 ? L.palFrom : L.palette;
+      L.palT = 0;
+      L.palDur = dur;
     } else {
-      this.palT = 1;
+      L.palT = 1;
     }
-    this.palette = i;
+    L.palette = i;
   }
+  get palette() { return this.layers[0].palette; }
+  set palette(i) { this.layers[0].palette = i; }
 
   // ---- rendering ---------------------------------------------------------
 
@@ -340,7 +342,7 @@ export class Engine {
     const gl = this.gl;
     const w = this.canvas.width, h = this.canvas.height;
     const prog = this.programs[modeIndex];
-    const palMix = this.palT < 1 ? smooth(this.palT) : 0;
+    const palMix = L.palT < 1 ? smooth(L.palT) : 0;
     gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fb);
     gl.viewport(0, 0, w, h);
     gl.useProgram(prog);
@@ -354,8 +356,8 @@ export class Engine {
     gl.uniform1i(this._u(prog, 'uAudio'), 1);
     gl.uniform1i(this._u(prog, 'uSim'), 2);
     this._setAudioUniforms(prog, audio, params, time, dt);
-    gl.uniform1i(this._u(prog, 'uPalette'), palMix > 0 ? this.palFrom : this.palette);
-    gl.uniform1i(this._u(prog, 'uPaletteTo'), this.palette);
+    gl.uniform1i(this._u(prog, 'uPalette'), palMix > 0 ? L.palFrom : L.palette);
+    gl.uniform1i(this._u(prog, 'uPaletteTo'), L.palette);
     gl.uniform1f(this._u(prog, 'uPalMix'), palMix);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
@@ -381,6 +383,7 @@ export class Engine {
   _renderLayer(L, audio, params, time, dt, inject) {
     if (L.mode < 0) return null;
     if (L.fadeT < 1) L.fadeT = Math.min(1, L.fadeT + dt / Math.max(0.01, L.fadeDur));
+    if (L.palT < 1) L.palT = Math.min(1, L.palT + dt / Math.max(0.01, L.palDur));
     const fading = L.fadeT < 1;
 
     const simIdx = MODES[L.mode].sim ? L.mode : (fading && MODES[L.fromMode].sim ? L.fromMode : -1);
@@ -404,8 +407,6 @@ export class Engine {
   render(audio, params, time, dt) {
     const gl = this.gl;
     const w = this.canvas.width, h = this.canvas.height;
-
-    if (this.palT < 1) this.palT = Math.min(1, this.palT + dt / Math.max(0.01, this.palDur));
 
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.audioTex);

@@ -53,19 +53,27 @@ seconds after starting to settle.
   a second per beat. When the tempo tracker is confident, the switch is held
   until the next predicted beat so changes land on the grid.
 - CYCLE SCENES makes auto-cycle walk the saved scenes in order instead of
-  the mode list.
+  the mode list. RANDOM CYCLE rerolls everything on each step instead.
+  Either one switches AUTO CYCLE on; AUTO CYCLE off stops all of them.
+- Every transition (mode change, scene load, random) uses the current FADE:
+  mode and palette crossfade in the engine, and the sliders glide from their
+  old values to the new ones over the same time. Touching a slider during a
+  glide takes it over. FADE itself is never changed by a scene load's
+  transition or by randomization.
 - RES is the render scale. 70% is the default; a big TV or a slow laptop
   may want it lower, a 4K output can go higher.
-- RANDOM rerolls the mode, palette, sliders and sometimes adds a second
-  layer (SENS stays within a sane 0.7x to 2.2x). Auto-cycle is left as it
-  is. The current FADE is used for the transition.
+- RANDOM rerolls the mode, palette, CORRUPT, DECAY, SENS, CYCLE and
+  sometimes adds a second layer (SENS stays within a sane 0.7x to 2.2x).
+  FADE and auto-cycle are left alone.
 - Settings persist in localStorage.
 
 ## Layer B
 
 The LAYER B dropdown runs a second mode on its own feedback buffers, and the
 blend dropdown composites it over the main layer: MIX, ADD, MULTIPLY, SCREEN,
-DIFFERENCE or LIGHTEN. Both layers crossfade on mode changes.
+DIFFERENCE or LIGHTEN. The third dropdown gives layer B its own palette, or
+FOLLOW A to share the main one. Both layers crossfade on mode and palette
+changes.
 
 ## Source (logo / camera)
 
@@ -113,9 +121,10 @@ Then switch on OSC BRIDGE in the panel. Addresses:
 | `/sg/palette` | i | palette by index |
 | `/sg/layer` | i | layer B mode, -1 for off |
 | `/sg/blend` | i | blend mode 0..5 |
+| `/sg/paletteB` | i | layer B palette, -1 to follow A |
 | `/sg/scene` | i or s | load a scene by index or name |
 | `/sg/random` `/sg/clear` | | as the buttons |
-| `/sg/auto` `/sg/cycleScenes` | i | 1 on, 0 off (no arg toggles) |
+| `/sg/auto` `/sg/cycleScenes` `/sg/randomCycle` | i | 1 on, 0 off (no arg toggles) |
 
 ## Stage output
 

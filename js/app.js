@@ -26,14 +26,18 @@ try {
 
 const DEFAULTS = {
   mode: 0, palette: 0, corrupt: 0.5, decay: 0.65, sens: 1.0, focus: 0.5,
-  auto: false, cycleScenes: false, cycle: 16, fade: 2, res: 0.7,
-  layerB: -1, blend: 1,
+  auto: false, cycleScenes: false, randomCycle: false, cycle: 16, fade: 2, res: 0.7,
+  layerB: -1, blend: 1, paletteB: -1,
   srcBurn: 0, srcOpacity: 0, srcSize: 0.5, srcX: 0.5, srcY: 0.5,
   osc: false, midi: false,
 };
 // what a scene captures (not input, cycling or transport settings)
 const SCENE_KEYS = ['mode', 'palette', 'corrupt', 'decay', 'sens', 'focus', 'cycle', 'fade',
-                    'layerB', 'blend', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY'];
+                    'layerB', 'blend', 'paletteB', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY'];
+// continuous values that glide to a new target over the fade time instead of jumping
+const TWEEN_KEYS = ['corrupt', 'decay', 'sens', 'focus', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY'];
+let tween = null; // { from, to, t, dur }
+const smoothstep = t => t * t * (3 - 2 * t);
 
 const params = Object.assign({}, DEFAULTS, load());
 function load() {
@@ -56,7 +60,9 @@ function apply(fade = params.fade) {
   if (params.layerB >= MODES.length) params.layerB = -1;
   engine.setMode(params.mode, fade, 0);
   engine.setMode(params.layerB, fade, 1);
-  engine.setPalette(params.palette, fade);
+  engine.setPalette(params.palette, fade, 0);
+  if (params.paletteB >= PALETTES.length) params.paletteB = -1;
+  engine.setPalette(params.paletteB < 0 ? params.palette : params.paletteB, fade, 1);
   engine.blend = params.blend;
   engine.src.burn = params.srcBurn;
   engine.src.opacity = params.srcOpacity;
@@ -79,8 +85,42 @@ function setMode(i, fade = params.fade) { params.mode = wrap(i, MODES.length); c
 function setPalette(i, fade = params.fade) { params.palette = wrap(i, PALETTES.length); commit(fade); }
 function setLayerB(i, fade = params.fade) { params.layerB = Math.max(-1, Math.min(MODES.length - 1, i)); commit(fade); }
 function setBlend(i) { params.blend = wrap(i, BLENDS.length); commit(0); }
+function setPaletteB(i, fade = params.fade) { params.paletteB = Math.max(-1, Math.min(PALETTES.length - 1, i)); commit(fade); }
 function setAuto(v) { params.auto = v; commit(0); }
-function setCycleScenes(v) { params.cycleScenes = v; commit(0); }
+// the two cycle flavours switch auto-cycle on when enabled; AUTO CYCLE is the master switch
+function setCycleScenes(v) { params.cycleScenes = v; if (v) { params.randomCycle = false; params.auto = true; } commit(0); }
+function setRandomCycle(v) { params.randomCycle = v; if (v) { params.cycleScenes = false; params.auto = true; } commit(0); }
+
+// Move to a new set of values: discrete keys (mode, palette, layer, blend)
+// change at once and crossfade in the engine; continuous keys glide over the
+// fade time. FADE itself is never part of a transition.
+function transitionTo(target, fade = params.fade) {
+  const from = {}, to = {};
+  for (const [k, v] of Object.entries(target)) {
+    if (k === 'fade') continue;
+    if (fade > 0 && TWEEN_KEYS.includes(k) && typeof v === 'number' && Math.abs(v - params[k]) > 1e-6) {
+      from[k] = params[k];
+      to[k] = v;
+    } else {
+      params[k] = v;
+    }
+  }
+  tween = Object.keys(to).length ? { from, to, t: 0, dur: fade } : null;
+  commit(fade);
+}
+function stepTween(dt) {
+  if (!tween) return;
+  tween.t = Math.min(1, tween.t + dt / Math.max(0.01, tween.dur));
+  const s = smoothstep(tween.t);
+  for (const k of Object.keys(tween.to)) params[k] = tween.from[k] + (tween.to[k] - tween.from[k]) * s;
+  apply(0);
+  const done = tween.t >= 1;
+  if (done || (engine.frame & 3) === 0) {
+    refreshSliders();
+    if (ROLE === 'controller') link.sendParams(params);
+  }
+  if (done) { tween = null; save(); }
+}
 function setCycle(v) { params.cycle = Math.min(64, Math.max(1, Math.round(v))); commit(0); }
 function setSlider(k, v) {
   const el = sliders[k];
@@ -91,8 +131,9 @@ function setSlider(k, v) {
   commit(0);
 }
 
-// Reroll everything that shapes the look. Auto-cycle stays as it is, and the
-// current FADE is used so the new mode and palette blend in.
+// Reroll everything that shapes the look. Auto-cycle and FADE stay as they
+// are; the current FADE is used so mode and palette crossfade and the
+// sliders glide to their new values.
 function randomize() {
   const r = (a, b) => a + Math.random() * (b - a);
   const pick = n => Math.floor(Math.random() * n);
@@ -100,24 +141,23 @@ function randomize() {
   if (mode === params.mode) mode = (mode + 1 + pick(MODES.length - 1)) % MODES.length;
   let pal = pick(PALETTES.length);
   if (pal === params.palette) pal = (pal + 1 + pick(PALETTES.length - 1)) % PALETTES.length;
-  const fade = params.fade;
-  params.mode = mode;
-  params.palette = pal;
-  params.corrupt = +r(0, 1).toFixed(2);
-  params.decay = +r(0.2, 1).toFixed(2);
-  params.sens = +r(0.7, 2.2).toFixed(2);
-  params.cycle = [2, 4, 8, 8, 16, 16, 32][pick(7)];
-  params.fade = +[0, 0.5, 1, 2, 2, 4, 6][pick(7)].toFixed(1);
+  const target = {
+    mode, palette: pal,
+    corrupt: +r(0, 1).toFixed(2),
+    decay: +r(0.2, 1).toFixed(2),
+    sens: +r(0.7, 2.2).toFixed(2),
+    cycle: [2, 4, 8, 8, 16, 16, 32][pick(7)],
+    layerB: -1,
+  };
   if (Math.random() < 0.35) {
     let b = pick(MODES.length);
     if (b === mode) b = (b + 1) % MODES.length;
-    params.layerB = b;
-    params.blend = pick(BLENDS.length);
-  } else {
-    params.layerB = -1;
+    target.layerB = b;
+    target.blend = pick(BLENDS.length);
+    target.paletteB = Math.random() < 0.5 ? -1 : pick(PALETTES.length);
   }
   sceneIdx = -1;
-  commit(fade);
+  transitionTo(target);
 }
 
 // ---- scenes --------------------------------------------------------------
@@ -131,8 +171,10 @@ function loadScene(i, fade = params.fade) {
   const s = scenes.get(i);
   if (!s) return;
   sceneIdx = i;
-  for (const k of SCENE_KEYS) if (k in s.params) params[k] = s.params[k];
-  commit(fade);
+  const target = {};
+  for (const k of SCENE_KEYS) if (k in s.params) target[k] = s.params[k];
+  transitionTo(target, fade);
+  if ('fade' in s.params) { params.fade = s.params.fade; refreshSliders(); save(); }
 }
 function saveScene() {
   const name = window.prompt('Scene name', scenes.get(sceneIdx)?.name || `SCENE ${scenes.list.length + 1}`);
@@ -182,6 +224,11 @@ const blendSel = $('#blend');
 BLENDS.forEach((b, i) => blendSel.appendChild(new Option(b, i)));
 blendSel.addEventListener('change', () => setBlend(+blendSel.value));
 blendSel.addEventListener('mousedown', e => { if (midi.learning) { e.preventDefault(); midi.arm('blendSel'); } });
+const palBSel = $('#paletteB');
+palBSel.appendChild(new Option('FOLLOW A', -1));
+PALETTES.forEach((p, i) => palBSel.appendChild(new Option(p, i)));
+palBSel.addEventListener('change', () => setPaletteB(+palBSel.value));
+palBSel.addEventListener('mousedown', e => { if (midi.learning) { e.preventDefault(); midi.arm('palBSel'); } });
 
 const sliders = {};
 for (const k of ['corrupt', 'decay', 'sens', 'focus', 'cycle', 'fade', 'res', 'srcBurn', 'srcOpacity', 'srcSize', 'srcX', 'srcY']) {
@@ -189,6 +236,7 @@ for (const k of ['corrupt', 'decay', 'sens', 'focus', 'cycle', 'fade', 'res', 's
   sliders[k] = el;
   el.dataset.target = k;
   el.addEventListener('input', () => {
+    if (tween) delete tween.to[k]; // a hand on the slider wins over a glide
     params[k] = parseFloat(el.value);
     apply(0);
     $(`#${k}Val`).textContent = fmt(k);
@@ -209,6 +257,13 @@ function fmt(k) {
   return Math.round(v * 100) + '%';
 }
 
+function refreshSliders() {
+  for (const [k, el] of Object.entries(sliders)) {
+    el.value = params[k];
+    $(`#${k}Val`).textContent = fmt(k);
+  }
+}
+
 function refreshUI() {
   $('#modeName').textContent = MODES[params.mode].name;
   $('#modeBlurb').textContent = MODES[params.mode].blurb;
@@ -216,12 +271,11 @@ function refreshUI() {
   [...palRow.children].forEach(b => b.classList.toggle('on', +b.dataset.i === params.palette));
   layerSel.value = params.layerB;
   blendSel.value = params.blend;
+  palBSel.value = params.paletteB;
   $('#auto').classList.toggle('on', params.auto);
   $('#cycleScenes').classList.toggle('on', params.cycleScenes);
-  for (const [k, el] of Object.entries(sliders)) {
-    el.value = params[k];
-    $(`#${k}Val`).textContent = fmt(k);
-  }
+  $('#randomCycle').classList.toggle('on', params.randomCycle);
+  refreshSliders();
   $('#osc').classList.toggle('on', params.osc);
   $('#midi').classList.toggle('on', params.midi);
   refreshScenes();
@@ -340,6 +394,7 @@ $('#device').addEventListener('change', async () => {
 
 $('#auto').addEventListener('click', () => guard('auto', () => setAuto(!params.auto)));
 $('#cycleScenes').addEventListener('click', () => guard('cycleScenes', () => setCycleScenes(!params.cycleScenes)));
+$('#randomCycle').addEventListener('click', () => guard('randomCycle', () => setRandomCycle(!params.randomCycle)));
 $('#random').addEventListener('click', () => guard('random', randomize));
 $('#clear').addEventListener('click', () => guard('clear', () => { engine.clear(); link.sendCmd('clear'); }));
 $('#full').addEventListener('click', toggleFull);
@@ -466,12 +521,14 @@ function act(target, value = 1, isCC = false, edge = true) {
     case 'sceneSel': if (scenes.list.length) loadScene(Math.min(scenes.list.length - 1, Math.floor(value * scenes.list.length))); break;
     case 'layerSel': setLayerB(Math.floor(value * (n + 1)) - 1); break;
     case 'blendSel': setBlend(Math.min(BLENDS.length - 1, Math.floor(value * BLENDS.length))); break;
+    case 'palBSel': setPaletteB(Math.floor(value * (PALETTES.length + 1)) - 1); break;
     case 'next': if (edge) setMode(params.mode + 1); break;
     case 'prev': if (edge) setMode(params.mode - 1); break;
     case 'random': if (edge) randomize(); break;
     case 'clear': if (edge) { engine.clear(); link.sendCmd('clear'); } break;
     case 'auto': if (edge) setAuto(!params.auto); break;
     case 'cycleScenes': if (edge) setCycleScenes(!params.cycleScenes); break;
+    case 'randomCycle': if (edge) setRandomCycle(!params.randomCycle); break;
     case 'mic': if (edge) $('#mic').click(); break;
   }
 }
@@ -504,6 +561,7 @@ function onOsc(address, args) {
     case 'palette': if (typeof v === 'number') setPalette(v); break;
     case 'layer': if (typeof v === 'number') setLayerB(v); break;
     case 'blend': if (typeof v === 'number') setBlend(v); break;
+    case 'paletteB': if (typeof v === 'number') setPaletteB(v); break;
     case 'scene': {
       if (typeof v === 'number') loadScene(v);
       else if (typeof v === 'string') { const i = scenes.list.indexOf(scenes.byName(v)); if (i >= 0) loadScene(i); }
@@ -513,6 +571,7 @@ function onOsc(address, args) {
     case 'clear': engine.clear(); link.sendCmd('clear'); break;
     case 'auto': setAuto(typeof v === 'number' ? v > 0 : !params.auto); break;
     case 'cycleScenes': setCycleScenes(typeof v === 'number' ? v > 0 : !params.cycleScenes); break;
+    case 'randomCycle': setRandomCycle(typeof v === 'number' ? v > 0 : !params.randomCycle); break;
     case 'fadeTo': { // /sg/fadeTo <mode> <seconds>
       const secs = args[1] ? (args[1].value ?? args[1]) : params.fade;
       if (typeof v === 'number') setMode(v, +secs);
@@ -591,7 +650,8 @@ let t0 = performance.now(), last = t0, lastCycle = 0, lastBeatCount = 0, dueSinc
 function cycleFallback() { return Math.max(3, params.cycle * 0.75); }
 
 function stepCycle() {
-  if (params.cycleScenes && scenes.list.length) loadScene(wrap(sceneIdx + 1, scenes.list.length));
+  if (params.randomCycle) randomize();
+  else if (params.cycleScenes && scenes.list.length) loadScene(wrap(sceneIdx + 1, scenes.list.length));
   else setMode(params.mode + 1);
 }
 
@@ -601,6 +661,7 @@ function frame(now) {
   last = now;
 
   audio.update();
+  if (ROLE === 'controller') stepTween(dt);
   engine.resize();
   engine.render(audio, params, time, dt);
   if (ROLE === 'controller') link.sendAudio(audio.features());
@@ -649,7 +710,8 @@ window.addEventListener('resize', () => engine.resize());
 document.body.classList.toggle('output', ROLE === 'output');
 engine.layers[0].mode = params.mode;
 engine.layers[1].mode = params.layerB;
-engine.palette = params.palette;
+engine.layers[0].palette = params.palette;
+engine.layers[1].palette = params.paletteB < 0 ? params.palette : params.paletteB;
 apply(0);
 refreshUI();
 setStatus();
@@ -666,4 +728,4 @@ if (ROLE === 'controller') {
 requestAnimationFrame(frame);
 
 // debug hooks
-window.sg = { audio, engine, params, scenes, midi, link, frame: () => frame(performance.now()), setMode, setPalette, setLayerB, randomize, loadScene, act, onOsc, apply, ROLE };
+window.sg = { audio, engine, params, scenes, midi, link, frame: () => frame(performance.now()), setMode, setPalette, setLayerB, setPaletteB, randomize, loadScene, act, onOsc, apply, ROLE, tween: () => tween };
