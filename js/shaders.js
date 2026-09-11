@@ -989,14 +989,7 @@ void main() {
   vec3 col = shade(fold(uv, uMirror));
   if (uMirrorMix < 1.0) col = mix(shade(fold(uv, uMirrorFrom)), col, uMirrorMix);
 
-  // clean source overlay (logo / camera) on top
-  if (uSrcOpacity > 0.0) {
-    vec2 s = (uv - uSrcRect.xy) / uSrcRect.zw;
-    if (all(greaterThanEqual(s, vec2(0.0))) && all(lessThanEqual(s, vec2(1.0)))) {
-      vec4 c = texture(uSrc, s);
-      col = mix(col, c.rgb, c.a * uSrcOpacity);
-    }
-  }
-
+  // (the clean logo overlay is a separate DOM canvas above this one, so it is
+  // never touched by any effect, audio value or the render scale)
   fragColor = vec4(col, 1.0);
 }`;

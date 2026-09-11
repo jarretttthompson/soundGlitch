@@ -577,8 +577,6 @@ export class Engine {
       gl.uniform1i(this._u(P, 'uBlend' + name + 'From'), L.blendFrom);
       gl.uniform1f(this._u(P, 'uBlend' + name + 'Mix'), L.blendT < 1 ? smooth(L.blendT) : 1);
     }
-    gl.uniform4f(this._u(P, 'uSrcRect'), ...this._srcRect());
-    gl.uniform1f(this._u(P, 'uSrcOpacity'), hasSrc ? this.src.opacity : 0);
     if (this.mirrorT < 1) this.mirrorT = Math.min(1, this.mirrorT + dt / Math.max(0.01, this.mirrorDur));
     gl.uniform1f(this._u(P, 'uMirror'), this.fx.mirror);
     gl.uniform1f(this._u(P, 'uMirrorFrom'), this.mirrorFrom);

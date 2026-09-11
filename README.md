@@ -137,9 +137,18 @@ half the time and layer C a third of the time.
 ## Source (logo / camera)
 
 IMAGE loads a picture (or drop one anywhere on the page). CAMERA uses the
-webcam. BURN injects the source into the main layer's feedback every frame,
-so the datamosh, melt or ink eats it. OVERLAY draws it clean on top. SIZE, X
-and Y place it. The image is remembered; the camera is not.
+webcam. Two separate paths:
+
+- OVERLAY draws the source clean on its own full-resolution canvas above
+  the shader canvas. Nothing touches it: no mode, effect, mirror, pixelation,
+  hue shift, kick zoom, drop flash, silence dim or render scale. It is
+  exactly the file you loaded, at the opacity, size and position you set.
+- BURN is the deliberate opposite: it feeds the source into the main layer's
+  feedback every frame so the datamosh, melt or ink eats it. Leave it at 0
+  for an untouched logo.
+
+SIZE, X and Y place both. The source sliders are locked from randomization
+by default. The image is remembered; the camera is not.
 
 ## Scenes
 

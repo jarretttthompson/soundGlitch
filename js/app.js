@@ -560,14 +560,42 @@ function toggleFull() {
 // ---- source: image / camera ----------------------------------------------
 
 let srcDataUrl = null;
+let srcImage = null;
 let camStream = null;
 const SRC_KEY = 'soundglitch.source';
+
+// The clean overlay lives on its own full-resolution canvas above the shader
+// canvas. Nothing in the effect chain or the analyser can reach it; only
+// OVERLAY (opacity), SIZE, X and Y place it. BURN is the separate, deliberate
+// path that feeds the source into the feedback loop.
+const logoCanvas = $('#logo');
+const logoCtx = logoCanvas.getContext('2d');
+function drawLogo() {
+  const dpr = window.devicePixelRatio || 1;
+  const W = Math.floor(logoCanvas.clientWidth * dpr), H = Math.floor(logoCanvas.clientHeight * dpr);
+  if (logoCanvas.width !== W || logoCanvas.height !== H) { logoCanvas.width = W; logoCanvas.height = H; }
+  const src = engine.srcKind === 'image' ? srcImage : engine.srcKind === 'video' ? engine.srcVideo : null;
+  const op = params.srcOpacity;
+  logoCtx.clearRect(0, 0, W, H);
+  if (!src || op <= 0) return;
+  if (engine.srcKind === 'video' && (src.readyState < 2 || !src.videoWidth)) return;
+  const aspect = engine.srcKind === 'video' ? src.videoWidth / src.videoHeight : engine.srcAspect;
+  const h = params.srcSize * H;
+  const w = h * aspect;
+  const x = params.srcX * W - w / 2;
+  const y = (1 - params.srcY) * H - h / 2;
+  logoCtx.globalAlpha = Math.min(1, op);
+  logoCtx.imageSmoothingQuality = 'high';
+  logoCtx.drawImage(src, x, y, w, h);
+  logoCtx.globalAlpha = 1;
+}
 
 function useImageDataUrl(dataUrl, persist) {
   const img = new Image();
   img.onload = () => {
     stopCamera();
     engine.setSourceImage(img);
+    srcImage = img;
     srcDataUrl = dataUrl;
     if (persist) { try { localStorage.setItem(SRC_KEY, dataUrl); } catch (_) {} }
     if (ROLE === 'controller') link.sendSource(dataUrl);
@@ -622,6 +650,7 @@ $('#srcClear').addEventListener('click', () => {
   stopCamera();
   engine.clearSource();
   srcDataUrl = null;
+  srcImage = null;
   try { localStorage.removeItem(SRC_KEY); } catch (_) {}
   if (ROLE === 'controller') link.sendSource(null);
   refreshSrc();
@@ -750,7 +779,7 @@ const link = new Link(ROLE, {
   },
   onCmd: name => { if (name === 'clear') engine.clear(); },
   onAudio: m => audio.applyRemote(m),
-  onSource: m => { if (m.dataUrl) useImageDataUrl(m.dataUrl, false); else { engine.clearSource(); } },
+  onSource: m => { if (m.dataUrl) useImageDataUrl(m.dataUrl, false); else { engine.clearSource(); srcImage = null; } },
   onOutputJoined: () => { link.sendParams(params); if (srcDataUrl) link.sendSource(srcDataUrl); refreshCtl(); },
   onOsc,
   onStatus: refreshCtl,
@@ -835,6 +864,7 @@ function frame(now) {
   visTime += dt * calm * rate;
   const renderParams = calm < 0.999 ? Object.assign({}, params, { corrupt: params.corrupt * calm }) : params;
   engine.render(audio, renderParams, visTime, dt);
+  drawLogo();
   if (ROLE === 'controller') link.sendAudio(audio.features());
 
   if (ROLE === 'controller') {
