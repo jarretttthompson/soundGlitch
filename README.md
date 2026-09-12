@@ -196,6 +196,24 @@ Then switch on OSC BRIDGE in the panel. Addresses:
 | `/sg/random` `/sg/clear` | | as the buttons |
 | `/sg/auto` `/sg/cycleScenes` `/sg/randomCycle` | i | 1 on, 0 off (no arg toggles) |
 
+## Keeping the screen awake
+
+The page requests a Screen Wake Lock as soon as it loads (and again on the
+first click, and whenever the tab becomes visible again). While it is held,
+macOS will not start the screensaver or sleep the display. The status line
+shows AWAKE when the lock is held. Both the controller and the stage output
+hold their own lock, so the projector window stays on even if the laptop
+lid panel is the one you're looking at.
+
+Two things can still put the display to sleep: the tab being hidden (a
+different app fullscreen on the same display releases the lock, which is
+why the output should be the only thing on the projector) and a very low
+"Turn display off" setting in macOS Battery or Lock Screen settings on a
+browser that does not support the API. Chrome, Edge and Safari 16.4 and
+later support it. The Desktop launcher also runs `caffeinate -d` for twelve
+hours as a belt-and-braces measure; stop it early with
+`pkill -f "caffeinate -d"`.
+
 ## Stage output
 
 STAGE OUTPUT opens a second window showing only the visuals. Drag it to the

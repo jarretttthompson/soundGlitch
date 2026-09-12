@@ -815,6 +815,45 @@ window.addEventListener('keydown', e => {
   else if (k === 't' || k === 'T') $('#test').click();
 });
 
+// ---- keep the display awake ----------------------------------------------
+// Screen Wake Lock: while held, the OS won't start the screensaver or sleep
+// the display. It drops when the tab is hidden, so it is re-requested on
+// every visibility change; the first attempt happens at load, and again on
+// the first click in case the browser wanted a gesture.
+let wakeLock = null;
+let wakeState = 'wakeLock' in navigator ? 'off' : 'unsupported';
+async function keepAwake() {
+  if (wakeState === 'unsupported' || document.visibilityState !== 'visible') { refreshWake(); return; }
+  if (wakeLock && !wakeLock.released) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeState = 'held';
+    wakeLock.addEventListener('release', () => { wakeState = 'off'; refreshWake(); });
+  } catch (e) {
+    wakeLock = null;
+    wakeState = e && e.name === 'NotAllowedError' ? 'denied' : 'off';
+  }
+  refreshWake();
+}
+function refreshWake() {
+  const el = $('#wakeTxt');
+  if (!el) return;
+  const held = wakeState === 'held';
+  el.textContent = { held: 'AWAKE', off: 'WAKE OFF', denied: 'WAKE DENIED', unsupported: 'NO WAKE LOCK' }[wakeState];
+  el.classList.toggle('on', held);
+  el.title = {
+    held: 'screen wake lock held: no screensaver or display sleep while this tab is visible',
+    off: 'the display may sleep; click anywhere to request a wake lock',
+    denied: 'this browser refused the wake lock (embedded or restricted browser); use a normal Chrome/Safari window, or caffeinate',
+    unsupported: 'this browser has no Screen Wake Lock API; use the launcher (caffeinate) or turn off display sleep',
+  }[wakeState];
+  const tag = $('#tagWake');
+  if (tag) tag.textContent = held ? 'awake' : '';
+}
+document.addEventListener('visibilitychange', keepAwake);
+window.addEventListener('pointerdown', keepAwake, { once: false });
+keepAwake();
+
 // auto-hide UI when the mouse is still
 let idleTimer;
 function poke() {

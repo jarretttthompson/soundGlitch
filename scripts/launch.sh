@@ -13,3 +13,8 @@ if ! curl -s -o /dev/null --max-time 1 "$URL"; then
 fi
 
 open "$URL"
+
+# Belt and braces for shows: also hold off display sleep at the OS level for
+# the next 12 hours (the page's own wake lock covers the normal case). Quit
+# with: pkill -f "caffeinate -d"
+pgrep -f "caffeinate -d" >/dev/null || nohup caffeinate -d -t 43200 >/dev/null 2>&1 &
