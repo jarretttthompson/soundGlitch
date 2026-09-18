@@ -132,11 +132,20 @@
   body.output.idle #tag { opacity: 0; }
   #tag b { color: var(--acc); font-weight: 400; }
   input[type=file] { display: none; }
+
+  /* drop target shown while an image is dragged over the page */
+  #drop {
+    position: fixed; inset: 14px; display: none; align-items: center; justify-content: center;
+    border: 2px dashed var(--acc); color: var(--acc); font-size: 14px; letter-spacing: 0.25em;
+    background: rgba(5, 5, 5, 0.35); pointer-events: none; z-index: 5;
+  }
+  body.dropping #drop { display: flex; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <canvas id="logo"></canvas>
+<div id="drop">DROP IMAGE</div>
 
 <div id="ui">
   <div class="head">

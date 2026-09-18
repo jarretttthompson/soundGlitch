@@ -590,6 +590,19 @@ function drawLogo() {
   logoCtx.globalAlpha = 1;
 }
 
+// A copy small enough to keep in localStorage and to mirror to output windows
+// (a phone photo as a data URL blows the 5 MB quota and would silently vanish).
+function shrinkForStore(img, max = 1536) {
+  const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+  const s = Math.min(1, max / Math.max(w, h));
+  if (s === 1 && srcDataUrl && srcDataUrl.length < 2.5e6) return srcDataUrl;
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w * s));
+  c.height = Math.max(1, Math.round(h * s));
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL('image/png');
+}
+
 function useImageDataUrl(dataUrl, persist) {
   const img = new Image();
   img.onload = () => {
@@ -597,30 +610,84 @@ function useImageDataUrl(dataUrl, persist) {
     engine.setSourceImage(img);
     srcImage = img;
     srcDataUrl = dataUrl;
-    if (persist) { try { localStorage.setItem(SRC_KEY, dataUrl); } catch (_) {} }
-    if (ROLE === 'controller') link.sendSource(dataUrl);
+    // a freshly dropped logo should be visible at once: clean overlay on, untouched
+    if (params.srcBurn === 0 && params.srcOpacity === 0) { params.srcOpacity = 1; commit(0); }
+    let stored = null;
+    try { stored = shrinkForStore(img); } catch (_) {}
+    if (persist && stored) { try { localStorage.setItem(SRC_KEY, stored); } catch (_) { srcNote('image loaded (too large to remember)'); } }
+    if (ROLE === 'controller') link.sendSource(stored || dataUrl);
     refreshSrc();
   };
+  img.onerror = () => srcNote('could not read that image');
   img.src = dataUrl;
 }
+function srcNote(text) {
+  $('#srcTxt').textContent = text;
+  $('#srcSection').open = true;
+}
+function loadImageFile(f) {
+  if (!f) return;
+  if (!f.type.startsWith('image/') && !/\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(f.name || '')) { srcNote('not an image file'); return; }
+  const rd = new FileReader();
+  rd.onload = () => useImageDataUrl(rd.result, true);
+  rd.onerror = () => srcNote('could not read that file');
+  rd.readAsDataURL(f);
+}
+// an image dragged from another web page arrives as a URL; fetch it if the
+// host allows, otherwise explain
+async function loadImageUrl(url) {
+  try {
+    const res = await fetch(url, { mode: 'cors' });
+    if (!res.ok) throw new Error(res.status);
+    const blob = await res.blob();
+    if (!blob.type.startsWith('image/')) throw new Error('not an image');
+    loadImageFile(new File([blob], 'dropped', { type: blob.type }));
+  } catch (_) {
+    srcNote('that site blocks image drops. save the file first, then drop it');
+  }
+}
+function takeDrop(dt) {
+  const f = [...(dt.files || [])].find(x => x.type.startsWith('image/')) || (dt.files && dt.files[0]);
+  if (f) { loadImageFile(f); return true; }
+  const html = dt.getData('text/html');
+  const m = html && html.match(/<img[^>]+src=["']([^"']+)["']/i);
+  const uri = (dt.getData('text/uri-list') || dt.getData('text/plain') || '').split('\n')[0].trim();
+  const url = (m && m[1]) || uri;
+  if (url && /^(https?:|data:image|blob:)/i.test(url)) { loadImageUrl(url); return true; }
+  return false;
+}
+
 $('#imageBtn').addEventListener('click', () => $('#imageFile').click());
 $('#imageFile').addEventListener('change', () => {
-  const f = $('#imageFile').files[0];
-  if (!f) return;
-  const rd = new FileReader();
-  rd.onload = () => useImageDataUrl(rd.result, true);
-  rd.readAsDataURL(f);
+  loadImageFile($('#imageFile').files[0]);
   $('#imageFile').value = '';
 });
-// drag and drop an image anywhere
-window.addEventListener('dragover', e => e.preventDefault());
+// drag and drop an image anywhere on the page
+let dragDepth = 0;
+window.addEventListener('dragenter', e => {
+  e.preventDefault();
+  dragDepth++;
+  document.body.classList.add('dropping');
+});
+window.addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) document.body.classList.remove('dropping');
+});
+window.addEventListener('dragover', e => {
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+});
 window.addEventListener('drop', e => {
   e.preventDefault();
-  const f = [...(e.dataTransfer.files || [])].find(x => x.type.startsWith('image/'));
-  if (!f) return;
-  const rd = new FileReader();
-  rd.onload = () => useImageDataUrl(rd.result, true);
-  rd.readAsDataURL(f);
+  dragDepth = 0;
+  document.body.classList.remove('dropping');
+  if (!takeDrop(e.dataTransfer)) srcNote('drop an image file (png, jpg, svg)');
+});
+// paste an image from the clipboard
+window.addEventListener('paste', e => {
+  const items = [...(e.clipboardData?.items || [])];
+  const it = items.find(i => i.type.startsWith('image/'));
+  if (it) { e.preventDefault(); loadImageFile(it.getAsFile()); }
 });
 
 async function startCamera() {

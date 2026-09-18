@@ -136,8 +136,11 @@ half the time and layer C a third of the time.
 
 ## Source (logo / camera)
 
-IMAGE loads a picture (or drop one anywhere on the page). CAMERA uses the
-webcam. Two separate paths:
+IMAGE loads a picture, or drop one anywhere on the page (a DROP IMAGE frame
+appears while you drag), or paste one from the clipboard. Images dragged
+straight from another web page are fetched when that site allows it. A
+freshly loaded logo switches OVERLAY on so it is visible at once. CAMERA
+uses the webcam. Two separate paths:
 
 - OVERLAY draws the source clean on its own full-resolution canvas above
   the shader canvas. Nothing touches it: no mode, effect, mirror, pixelation,
